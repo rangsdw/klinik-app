@@ -79,12 +79,78 @@ Penghitung atomik. Key `rm-<tahun>` untuk nomor rekam medis per tahun (zona Asia
 
 Nomor RM dibuat di `src/features/patients/mrn.ts` dengan satu statement `INSERT ... ON DUPLICATE KEY UPDATE value = value + 1` di dalam transaksi pembuatan pasien, lalu nilainya dibaca di transaksi yang sama. Aman dipanggil paralel (diuji di `tests/unit/patients.db.test.ts`).
 
-## Blok modul berikutnya
+## Tabel Modul Dokter & Rekam Medis (Tahap 3 & Rekam Medis)
 
-`prisma/schema.prisma` sudah punya blok bertanda untuk:
+### `appointments` (Appointment)
+Menyimpan jadwal dan sesi pemeriksaan antara pasien dengan dokter.
 
-- Jadwal, appointment, antrean (Rangga, Tahap 3 & 4)
-- Rekam medis (Ravy)
-- Obat, farmasi, kasir (Axel)
+| Kolom | Tipe | Catatan |
+| ----- | ---- | ------- |
+| id | varchar (cuid) | PK |
+| patient_id | varchar | FK ke `patients.id` (cascade), index |
+| doctor_id | varchar | FK ke `users.id` (dokter) |
+| appointment_date | date | Tanggal janji temu |
+| start_time, end_time | varchar(5) | Format "HH:mm" (misal "09:00") |
+| queue_number | int | Nomor antrean harian dokter |
+| status | enum AppointmentStatus | PENDING, CONFIRMED, IN_PROGRESS, COMPLETED, CANCELLED, NO_SHOW |
+| chief_complaint | text | Keluhan utama / alasan berobat pasien |
+| created_at, updated_at | datetime | |
 
-Tambahkan model di blok masing-masing, buat migrasi baru (`npm run db:migrate`), dan jangan mengedit migrasi yang sudah di-merge.
+### `appointment_histories` (AppointmentHistory)
+Log riwayat status appointment.
+
+| Kolom | Tipe | Catatan |
+| ----- | ---- | ------- |
+| id | varchar (cuid) | PK |
+| appointment_id | varchar | FK ke `appointments.id` (cascade), index |
+| status | enum AppointmentStatus | Status saat log dicatat |
+| notes | text | Catatan perubahan status |
+| changed_by_user_id | varchar | User ID yang melakukan perubahan status |
+| created_at | datetime | |
+
+### `medical_records` (MedicalRecord)
+Catatan pemeriksaan medis oleh dokter (metode SOAP).
+
+| Kolom | Tipe | Catatan |
+| ----- | ---- | ------- |
+| id | varchar (cuid) | PK |
+| appointment_id | varchar | FK 1-to-1 unik ke `appointments.id` (cascade) |
+| patient_id | varchar | FK ke `patients.id` (cascade), index |
+| doctor_id | varchar | FK ke `users.id` (dokter pemeriksa), index |
+| subjective | text | Keluhan subjektif pasien (S) |
+| objective | text | Hasil pemeriksaan fisik / penunjang (O) |
+| assessment | text | Diagnosis medis / ICD-10 (A) |
+| plan | text | Rencana tindakan / terapi / edukasi (P) |
+| blood_pressure | varchar(20) | Tensi darah (misal "120/80") |
+| body_temperature | float | Suhu tubuh (°C) |
+| pulse_rate | int | Denyut nadi (bpm) |
+| created_at, updated_at | datetime | |
+
+### `medicines` (Medicine)
+Master data obat klinik.
+
+| Kolom | Tipe | Catatan |
+| ----- | ---- | ------- |
+| id | varchar (cuid) | PK |
+| code | varchar(50) | Unik, kode / SKU obat |
+| name | varchar(150) | Nama obat dan dosis |
+| category | varchar(100) | Kategori obat |
+| dosage_form | varchar(50) | Tablet, Sirup, Kapsul, Salep, dll |
+| unit | varchar(50) | Strip, Botol, Tube, dll |
+| stock | int | Stok fisik obat |
+| price | decimal(12,2) | Harga per unit |
+| is_active | boolean | Status keaktifan obat di apotek |
+| created_at, updated_at | datetime | |
+
+### `prescription_items` (PrescriptionItem)
+Item resep obat yang dikeluarkan dokter dari rekam medis.
+
+| Kolom | Tipe | Catatan |
+| ----- | ---- | ------- |
+| id | varchar (cuid) | PK |
+| medical_record_id | varchar | FK ke `medical_records.id` (cascade), index |
+| medicine_id | varchar | FK ke `medicines.id`, index |
+| quantity | int | Jumlah obat yang diresepkan |
+| dosage_instructions | varchar(255) | Aturan pakai (signa: misal "3x1 sehari sesudah makan") |
+| notes | text | Catatan khusus untuk apotek/pasien |
+| created_at | datetime | |

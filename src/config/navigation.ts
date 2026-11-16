@@ -33,9 +33,9 @@ export const appNavigation: NavItem[] = [
   { title: "Akun internal", href: "/admin/pengguna", icon: Users, roles: ["ADMIN"] },
 
   // --- Dokter
-  { title: "Dashboard", href: "/dokter", icon: LayoutDashboard, roles: ["DOCTOR"] },
-  // Tahap 3: "Jadwal hari ini"
-  // Ravy: tambah "Rekam medis" di sini
+  { title: "Dashboard & Janji", href: "/dokter", icon: LayoutDashboard, roles: ["DOCTOR"] },
+  { title: "Daftar Pasien", href: "/dokter/pasien", icon: Users, roles: ["DOCTOR"] },
+  { title: "Stok Obat", href: "/dokter/obat", icon: Pill, roles: ["DOCTOR"] },
 
   // --- Staf
   { title: "Dashboard", href: "/staf", icon: LayoutDashboard, roles: ["STAFF"] },
