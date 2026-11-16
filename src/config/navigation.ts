@@ -1,0 +1,80 @@
+import type { LucideIcon } from "lucide-react";
+import {
+  ClipboardList,
+  CreditCard,
+  House,
+  LayoutDashboard,
+  ListOrdered,
+  Pill,
+  UserRound,
+  UserPlus,
+  Users,
+  History,
+} from "lucide-react";
+import type { RoleName, StaffTypeName } from "@/lib/roles";
+
+export type NavItem = {
+  title: string;
+  href: string;
+  icon: LucideIcon;
+  /** Role yang melihat item ini. */
+  roles: RoleName[];
+  /** Bila diisi, hanya staf dengan staffType ini yang melihatnya. */
+  staffTypes?: StaffTypeName[];
+};
+
+/**
+ * SATU sumber menu sidebar area (app): admin, dokter, staf.
+ * Modul lain (Ravy: rekam medis, Axel: farmasi/kasir) cukup menambah item di sini.
+ */
+export const appNavigation: NavItem[] = [
+  // --- Admin (Rangga)
+  { title: "Dashboard", href: "/admin", icon: LayoutDashboard, roles: ["ADMIN"] },
+  { title: "Akun internal", href: "/admin/pengguna", icon: Users, roles: ["ADMIN"] },
+
+  // --- Dokter
+  { title: "Dashboard", href: "/dokter", icon: LayoutDashboard, roles: ["DOCTOR"] },
+  // Tahap 3: "Jadwal hari ini"
+  // Ravy: tambah "Rekam medis" di sini
+
+  // --- Staf
+  { title: "Dashboard", href: "/staf", icon: LayoutDashboard, roles: ["STAFF"] },
+  {
+    title: "Pendaftaran",
+    href: "/staf/pendaftaran",
+    icon: UserPlus,
+    roles: ["STAFF"],
+    staffTypes: ["REGISTRATION"],
+  },
+  {
+    title: "Farmasi",
+    href: "/staf/farmasi",
+    icon: Pill,
+    roles: ["STAFF"],
+    staffTypes: ["PHARMACY"],
+  },
+  {
+    title: "Kasir",
+    href: "/staf/kasir",
+    icon: CreditCard,
+    roles: ["STAFF"],
+    staffTypes: ["CASHIER"],
+  },
+];
+
+export function navigationFor(role: RoleName, staffType?: StaffTypeName | null): NavItem[] {
+  return appNavigation.filter(
+    (item) =>
+      item.roles.includes(role) &&
+      (!item.staffTypes || (staffType != null && item.staffTypes.includes(staffType))),
+  );
+}
+
+/** Navigasi portal pasien (bottom nav di mobile, horizontal di desktop). */
+export const patientNavigation = [
+  { title: "Beranda", href: "/pasien", icon: House },
+  { title: "Janji", href: "/pasien/janji", icon: ClipboardList },
+  { title: "Antrean", href: "/pasien/antrean", icon: ListOrdered },
+  { title: "Riwayat", href: "/pasien/riwayat", icon: History },
+  { title: "Profil", href: "/pasien/profil", icon: UserRound },
+] as const;

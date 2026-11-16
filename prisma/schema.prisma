@@ -1,0 +1,145 @@
+// Sistem Informasi Klinik — Prisma schema (MySQL 8)
+// Konvensi: model PascalCase, kolom camelCase, tabel/kolom MySQL snake_case lewat @@map/@map.
+// Tiap modul menambah modelnya di blok bertanda di bawah agar konflik merge minim.
+// Ringkasan tabel: docs/DATABASE.md
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUM DASAR (Rangga)
+// ============================================================
+
+enum Role {
+  ADMIN
+  DOCTOR
+  STAFF
+  PATIENT
+}
+
+enum StaffType {
+  REGISTRATION
+  PHARMACY
+  CASHIER
+}
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum Relationship {
+  SELF
+  SPOUSE
+  CHILD
+  PARENT
+  SIBLING
+  OTHER
+}
+
+enum BloodType {
+  A
+  B
+  AB
+  O
+}
+
+// ============================================================
+// AUTH & AKUN (Rangga)
+// ============================================================
+
+model User {
+  id              String     @id @default(cuid())
+  name            String     @db.VarChar(120)
+  email           String     @unique @db.VarChar(191)
+  phone           String?    @unique @db.VarChar(20)
+  passwordHash    String     @map("password_hash") @db.VarChar(255)
+  role            Role       @default(PATIENT)
+  /// Wajib bila role = STAFF (divalidasi di features/users/service.ts)
+  staffType       StaffType? @map("staff_type")
+  isActive        Boolean    @default(true) @map("is_active")
+  emailVerifiedAt DateTime?  @map("email_verified_at")
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  patients            Patient[]
+  passwordResetTokens PasswordResetToken[]
+
+  @@index([role])
+  @@map("users")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash") @db.VarChar(128)
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+/// Penghitung atomik (mis. nomor rekam medis per tahun: key "rm-2026").
+model Counter {
+  key   String @id @db.VarChar(64)
+  value Int    @default(0)
+
+  @@map("counters")
+}
+
+// ============================================================
+// PASIEN & AKUN KELUARGA (Rangga)
+// Satu baris = satu orang pasien dengan rekam medis & QR sendiri.
+// allergies & specialConditions dipakai fitur Red Flag modul dokter (Ravy).
+// ============================================================
+
+model Patient {
+  id                  String       @id @default(cuid())
+  accountUserId       String       @map("account_user_id")
+  /// Format RM-YYYY-000001, digenerate di features/patients/service.ts
+  medicalRecordNumber String       @unique @map("medical_record_number") @db.VarChar(20)
+  nik                 String?      @unique @db.Char(16)
+  name                String       @db.VarChar(120)
+  birthDate           DateTime     @map("birth_date") @db.Date
+  gender              Gender
+  bloodType           BloodType?   @map("blood_type")
+  phone               String?      @db.VarChar(20)
+  address             String?      @db.Text
+  relationship        Relationship
+  allergies           String?      @db.Text
+  specialConditions   String?      @map("special_conditions") @db.Text
+  /// Token unik untuk QR Code pasien (gambar QR dirender di Tahap 4)
+  qrToken             String       @unique @map("qr_token") @db.VarChar(64)
+  isSelf              Boolean      @default(false) @map("is_self")
+  deletedAt           DateTime?    @map("deleted_at")
+  createdAt           DateTime     @default(now()) @map("created_at")
+  updatedAt           DateTime     @updatedAt @map("updated_at")
+
+  account User @relation(fields: [accountUserId], references: [id], onDelete: Cascade)
+
+  @@index([accountUserId])
+  @@index([name])
+  @@map("patients")
+}
+
+// ============================================================
+// JADWAL, APPOINTMENT, ANTREAN (Rangga — Tahap 3 & 4)
+// ============================================================
+
+// ============================================================
+// REKAM MEDIS (Ravy)
+// ============================================================
+
+// ============================================================
+// OBAT, FARMASI, KASIR (Axel)
+// ============================================================

@@ -1,0 +1,202 @@
+/* Hallmark · shape: Counter (public) + app screens · genre: editorial · theme: custom (locked by brief) · job: sign up · idea: "the queue ticket on your phone is the clinic's promise" · vibe: "calm teal clinic, quiet paper, no waiting" · hero: Stage, text 5 / product sample 7 · nav: edge-aligned wordmark, four links, two actions · footer: contact ledger, hours and address as their own block · imagery: the product (patient ticket built in a slot) · signature: the queue ticket card showing a patient's own number
+ * paper: #F8FAFC (slate-50) · surface: absolute · accent: #0F766E (primary-700) · display: Plus Jakarta Sans · body: Plus Jakarta Sans
+ * axes: slate paper / Plus Jakarta Sans / teal · posture: Stage · contrast: pass · fold: pass · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V3 · weakest: V, the brief fixes the section list (cara kerja, layanan, jadwal, kontak); varied it by setting cara kerja as one numbered ledger and kontak as the closing practical block instead of cards */
+/* Hallmark · waive 74 · slate neutrals and teal-600/700 scale pinned by the brief section B · the clinic brief pins slate and the teal primary scale by hex */
+/* Hallmark · waive 7b · card surface #ffffff on slate-50 paper, brief section B says permukaan kartu putih · the clinic brief pins white cards on #F8FAFC paper */
+/* Hallmark · dismissed F18 · data-slot="label" is the shadcn/ui component marker on form labels, not an image slot */
+/* Hallmark · answered F19 · four weights 400/500/600/700 are named in the brief section B for Plus Jakarta Sans */
+
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ============================================================
+   DESIGN TOKENS — satu-satunya tempat literal warna & font.
+   Komponen memakai utilitas token (bg-primary-700, text-muted-foreground, dll).
+   ============================================================ */
+@theme {
+  /* Primary — teal, kesan medis yang tenang */
+  --color-primary-50: #f0fdfa;
+  --color-primary-100: #ccfbf1;
+  --color-primary-200: #99f6e4;
+  --color-primary-300: #5eead4;
+  --color-primary-400: #2dd4bf;
+  --color-primary-500: #14b8a6;
+  --color-primary-600: #0d9488;
+  --color-primary-700: #0f766e;
+  --color-primary-800: #115e59;
+  --color-primary-900: #134e4a;
+
+  /* Accent — biru lembut untuk info / link sekunder */
+  --color-accent-50: #eff6ff;
+  --color-accent-500: #3b82f6;
+  --color-accent-600: #2563eb;
+
+  /* Status: warna utama + latar lembut + tinta teks (kontras AA di atas latar lembut) */
+  --color-success: #16a34a;
+  --color-success-soft: #f0fdf4;
+  --color-success-ink: #15803d;
+  --color-warning: #d97706;
+  --color-warning-soft: #fffbeb;
+  --color-warning-ink: #b45309;
+  --color-danger: #dc2626;
+  --color-danger-soft: #fef2f2;
+  --color-danger-ink: #b91c1c;
+  --color-info: #2563eb;
+  --color-info-soft: #eff6ff;
+  --color-info-ink: #1d4ed8;
+
+  /* Neutral (skala slate dari brief) */
+  --color-paper: #f8fafc;
+  --color-surface: #ffffff;
+  --color-line: #e2e8f0;
+  --color-line-strong: #cbd5e1;
+  /* Tepi field: 3.3:1 di atas putih & paper (WCAG 1.4.11) */
+  --color-field-edge: #7d8ca2;
+  --color-ink: #1e293b;
+  --color-ink-soft: #475569;
+  --color-ink-muted: #64748b;
+  --color-ink-strong: #0f172a;
+
+  --font-sans: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
+
+  --shadow-card: 0 1px 2px 0 rgb(15 23 42 / 0.04), 0 4px 12px -2px rgb(15 23 42 / 0.06);
+  --shadow-ticket: 0 24px 60px -24px rgb(15 118 110 / 0.35);
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Pemetaan token semantik shadcn/ui ke palet klinik */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+}
+
+:root {
+  color-scheme: light;
+  --background: var(--color-paper);
+  --foreground: var(--color-ink);
+  --card: var(--color-surface);
+  --card-foreground: var(--color-ink);
+  --popover: var(--color-surface);
+  --popover-foreground: var(--color-ink);
+  /* Tombol utama: primary-700 (kontras 5.5:1 dengan teks putih; primary-600 hanya 3.7:1) */
+  --primary: var(--color-primary-700);
+  --primary-foreground: var(--color-surface);
+  --secondary: var(--color-primary-50);
+  --secondary-foreground: var(--color-primary-800);
+  --muted: #f1f5f9;
+  --muted-foreground: var(--color-ink-muted);
+  --accent: var(--color-primary-50);
+  --accent-foreground: var(--color-primary-800);
+  --destructive: var(--color-danger);
+  --border: var(--color-line);
+  --input: var(--color-field-edge);
+  /* Focus ring: primary-600 (3.7:1 di atas putih; primary-500 di bawah 3:1) */
+  --ring: var(--color-primary-600);
+  --radius: 0.625rem;
+  --sidebar: var(--color-surface);
+  --sidebar-foreground: var(--color-ink);
+  --sidebar-primary: var(--color-primary-700);
+  --sidebar-primary-foreground: var(--color-surface);
+  --sidebar-accent: var(--color-primary-50);
+  --sidebar-accent-foreground: var(--color-primary-800);
+  --sidebar-border: var(--color-line);
+  --sidebar-ring: var(--color-primary-600);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html,
+  body {
+    overflow-x: clip;
+  }
+  html {
+    @apply font-sans;
+    -webkit-text-size-adjust: 100%;
+    scrollbar-color: var(--color-line-strong) var(--color-paper);
+    scroll-padding-top: 5rem;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+  h1,
+  h2,
+  h3 {
+    overflow-wrap: break-word;
+    min-width: 0;
+    text-wrap: balance;
+  }
+  p {
+    text-wrap: pretty;
+  }
+  ::selection {
+    background: var(--color-primary-100);
+    color: var(--color-primary-900);
+  }
+  /* Focus ring yang jelas dan muncul seketika pada semua elemen interaktif */
+  :where(a, button, input, select, textarea, summary, [role="button"], [tabindex]):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    transition: none;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  :where(button, [role="button"]):active:not(:disabled) {
+    transform: translateY(1px);
+  }
+  :where(a):active {
+    opacity: 0.85;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
