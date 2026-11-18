@@ -1,20 +1,30 @@
 import type { Metadata } from "next";
-import { Package, Pill } from "lucide-react";
-import { ModulePlaceholder } from "@/components/layout/module-placeholder";
+import { db } from "@/lib/db";
+import { requireStaffType } from "@/lib/rbac";
+import { advancePrescription } from "@/features/pharmacy/actions";
+import { PrescriptionLabels } from "@/features/pharmacy/label";
+import Link from "next/link";
 
 export const metadata: Metadata = { title: "Farmasi" };
-
-/** Titik sambung modul farmasi (Axel). */
-export default function PharmacyPage() {
-  return (
-    <ModulePlaceholder
-      title="Farmasi"
-      description="Siapkan dan serahkan obat sesuai e-resep."
-      stats={[
-        { label: "Resep menunggu", icon: Pill, hint: "Modul farmasi (Axel)." },
-        { label: "Stok menipis", icon: Package, hint: "Modul inventaris (Axel)." },
-      ]}
-      moduleNote="Daftar resep, penyerahan obat, dan stok (batch/FEFO) akan tersedia di halaman ini."
-    />
-  );
+const statuses = ["WAITING", "PROCESSING", "READY", "DISPENSED"] as const;
+const labels = { WAITING: "Menunggu", PROCESSING: "Diproses", READY: "Siap diserahkan", DISPENSED: "Selesai" };
+const colors = { WAITING: "bg-amber-100 text-amber-800", PROCESSING: "bg-blue-100 text-blue-800", READY: "bg-teal-100 text-teal-800", DISPENSED: "bg-emerald-100 text-emerald-800" };
+const next = { WAITING: ["PROCESSING", "Terima e-resep"], PROCESSING: ["READY", "Tandai siap"], READY: ["DISPENSED", "Konfirmasi penyerahan"], DISPENSED: null } as const;
+const errors: Record<string,string> = { verification: "Konfirmasi pemeriksaan obat dan identitas pasien terlebih dahulu.", stock: "Stok tidak cukup atau obat tidak aktif. Penyerahan dibatalkan.", state: "Status resep sudah berubah. Muat ulang halaman.", quantity: "Jumlah obat tidak valid.", invalid: "Permintaan tidak valid.", retry: "Gagal menyimpan. Coba lagi." };
+export default async function PharmacyPage({ searchParams }: { searchParams: Promise<{ q?: string; status?: string; error?: string; success?: string }> }) {
+  await requireStaffType("PHARMACY");
+  const params = await searchParams;
+  const q = typeof params.q === "string" ? params.q.trim().slice(0,120) : "";
+  const status = statuses.find(s => s === params.status);
+  const [counts, records, lowStock] = await Promise.all([
+    db.medicalRecord.groupBy({ by: ["pharmacyStatus"], where: { prescriptions: { some: {} }, appointment: { status: "COMPLETED" } }, _count: { _all: true } }),
+    db.medicalRecord.findMany({ where: { prescriptions: { some: {} }, appointment: { status: "COMPLETED" }, ...(status ? { pharmacyStatus: status } : {}), ...(q ? { OR: [{ patient: { name: { contains: q } } }, { patient: { medicalRecordNumber: { contains: q } } }] } : {}) }, orderBy: { createdAt: "desc" }, take: 100, select: { id: true, createdAt: true, pharmacyStatus: true, pharmacyDispensedAt: true, patient: { select: { name: true, medicalRecordNumber: true, allergies: true } }, doctor: { select: { name: true } }, prescriptions: { select: { id: true, quantity: true, dosageInstructions: true, notes: true, medicine: { select: { name: true, stock: true, unit: true, isActive: true } } } } } }),
+    db.medicine.count({ where: { isActive: true, stock: { lte: 10 } } }),
+  ]);
+  return <main className="space-y-6"><header><p className="text-sm font-semibold text-teal-700">Pelayanan klinik / Farmasi</p><h1 className="mt-1 text-3xl font-bold">Dashboard farmasi</h1><p className="mt-2 text-sm text-ink-muted">Kelola e-resep, cetak etiket, dan penyerahan obat.</p></header>
+    {params.error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-red-800">{errors[params.error] ?? "Terjadi kesalahan."}</p>}{params.success && <p role="status" className="rounded-lg bg-emerald-50 p-3 text-emerald-800">Status resep berhasil diperbarui.</p>}
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">{statuses.map(s => <Link key={s} href={`?status=${s}`} className="rounded-xl border border-line p-4"><p className="text-sm text-ink-muted">{labels[s]}</p><p className="mt-2 text-3xl font-bold">{counts.find(c => c.pharmacyStatus === s)?._count._all ?? 0}</p></Link>)}<div className="rounded-xl border border-line p-4"><p className="text-sm text-ink-muted">Stok ≤ 10</p><p className="mt-2 text-3xl font-bold">{lowStock}</p></div></div>
+    <section className="space-y-4"><h2 className="text-xl font-semibold">Antrean e-resep</h2><form className="flex flex-wrap gap-2"><input name="q" defaultValue={q} placeholder="Nama pasien / nomor RM" aria-label="Cari pasien" className="rounded-lg border px-3 py-2"/><select name="status" defaultValue={status ?? ""} aria-label="Status resep" className="rounded-lg border px-3 py-2"><option value="">Semua status</option>{statuses.map(s => <option key={s} value={s}>{labels[s]}</option>)}</select><button className="rounded-lg bg-primary-700 px-4 py-2 text-white">Cari</button><Link href="/staf/farmasi" className="px-3 py-2 text-sm">Reset</Link></form><p className="text-sm text-ink-muted">Menampilkan hingga 100 resep terbaru sesuai filter.</p>
+    {!records.length && <div className="rounded-xl border border-dashed p-8 text-center">Belum ada e-resep yang sesuai. Resep akan muncul setelah dokter menyelesaikan pemeriksaan dan menyimpan resep.</div>}
+    {records.map(r => { const action = next[r.pharmacyStatus]; return <article key={r.id} className="space-y-4 rounded-xl border border-line p-4 sm:p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-lg font-semibold">{r.patient.name}</h3><p className="text-sm text-ink-muted">{r.patient.medicalRecordNumber} · {r.doctor.name} · {r.createdAt.toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta" })}</p></div><span className={`rounded-full px-3 py-1 text-xs font-semibold ${colors[r.pharmacyStatus]}`}>{labels[r.pharmacyStatus]}</span></div>{r.patient.allergies && <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Alergi tercatat: {r.patient.allergies}. Verifikasi sebelum penyerahan.</p>}<div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b"><th className="p-2">Obat</th><th className="p-2">Jumlah</th><th className="p-2">Aturan pakai / catatan</th><th className="p-2">Stok saat ini</th></tr></thead><tbody>{r.prescriptions.map(i => <tr key={i.id} className="border-b"><td className="p-2 font-medium">{i.medicine.name}</td><td className="p-2">{i.quantity} {i.medicine.unit}</td><td className="p-2">{i.dosageInstructions}{i.notes && <div className="text-ink-muted">{i.notes}</div>}</td><td className="p-2">{i.medicine.stock}{!i.medicine.isActive ? " (nonaktif)" : i.medicine.stock < i.quantity ? " (kurang)" : ""}</td></tr>)}</tbody></table></div><div className="flex flex-wrap gap-2">{r.pharmacyStatus !== "WAITING" && <PrescriptionLabels patient={r.patient.name} doctor={r.doctor.name} recordId={r.id} items={r.prescriptions.map(i => ({ id: i.id, name: i.medicine.name, quantity: i.quantity, unit: i.medicine.unit, instructions: i.dosageInstructions, notes: i.notes }))}/>}{action && <form action={advancePrescription}><input type="hidden" name="id" value={r.id}/><input type="hidden" name="target" value={action[0]}/>{r.pharmacyStatus === "READY" && <label className="mr-3 inline-flex items-center gap-2 text-sm"><input type="checkbox" name="verified" value="yes" required/> Obat dan identitas pasien sudah diperiksa</label>}<button className="rounded-lg bg-primary-700 px-4 py-2 text-sm font-semibold text-white">{action[1]}</button></form>}</div>{r.pharmacyDispensedAt && <p className="text-sm text-ink-muted">Diserahkan: {r.pharmacyDispensedAt.toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}</p>}</article>; })}</section></main>;
 }

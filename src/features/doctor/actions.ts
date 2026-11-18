@@ -10,7 +10,7 @@ import {
   saveSoapRecordSchema,
   type SaveSoapRecordInput,
 } from "./schemas";
-import type { AppointmentStatus } from "@prisma/client";
+import { Prisma, type AppointmentStatus } from "@prisma/client";
 
 export async function updateScheduleAction(
   appointmentId: string,
@@ -124,7 +124,10 @@ export async function saveSoapRecordAction(
     return { ok: false, message: "Janji temu tidak ditemukan atau akses ditolak." };
   }
 
+  try {
   await db.$transaction(async (tx) => {
+    const existing = await tx.medicalRecord.findUnique({ where: { appointmentId }, select: { pharmacyStatus: true } });
+    if (existing && existing.pharmacyStatus !== "WAITING") throw new Error("PHARMACY_LOCKED");
     // 1. Upsert Medical Record
     const record = await tx.medicalRecord.upsert({
       where: { appointmentId },
@@ -154,12 +157,12 @@ export async function saveSoapRecordAction(
     });
 
     // 2. Handle prescriptions
-    if (prescriptions && prescriptions.length > 0) {
+    if (prescriptions !== undefined) {
       await tx.prescriptionItem.deleteMany({
         where: { medicalRecordId: record.id },
       });
 
-      await tx.prescriptionItem.createMany({
+      if (prescriptions.length > 0) await tx.prescriptionItem.createMany({
         data: prescriptions.map((p) => ({
           medicalRecordId: record.id,
           medicineId: p.medicineId,
@@ -186,8 +189,12 @@ export async function saveSoapRecordAction(
         },
       });
     }
-  });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  } catch (error) {
+    return { ok: false, message: error instanceof Error && error.message === "PHARMACY_LOCKED" ? "Resep sudah diterima farmasi; hubungi staf farmasi sebelum melakukan koreksi." : "Gagal menyimpan rekam medis. Coba lagi." };
+  }
 
+  revalidatePath("/staf/farmasi");
   revalidatePath("/dokter");
   revalidatePath("/dokter/pasien");
   return { ok: true, message: "Catatan rekam medis & resep berhasil disimpan." };
