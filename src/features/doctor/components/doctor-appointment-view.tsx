@@ -29,7 +29,7 @@ type AppointmentItem = {
   appointmentDate: Date;
   startTime: string;
   endTime: string;
-  queueNumber: number;
+  queueNumber: number | null;
   status: AppointmentStatus;
   chiefComplaint: string | null;
   patient: {
@@ -244,7 +244,7 @@ export function DoctorAppointmentView({
                       <div className="flex items-start gap-3.5">
                         <div className="flex size-11 shrink-0 flex-col items-center justify-center rounded-xl bg-primary-50 font-bold text-primary-800 border border-primary-200">
                           <span className="text-[10px] font-medium leading-none text-primary-600">No</span>
-                          <span className="text-lg leading-tight">{item.queueNumber}</span>
+                          <span className="text-lg leading-tight">{item.queueNumber ?? "-"}</span>
                         </div>
 
                         <div className="space-y-1">

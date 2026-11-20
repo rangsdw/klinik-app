@@ -82,11 +82,15 @@ Seeder idempoten (aman diulang) dan menolak berjalan saat `NODE_ENV=production`.
 | `/`                                                              | publik                 | Landing page (Layanan, Jadwal Dokter, Kontak)         |
 | `/masuk`, `/daftar`, `/lupa-password`, `/reset-password/[token]` | publik                 | Auth; user yang sudah login diarahkan ke dashboard    |
 | `/admin`, `/admin/pengguna`                                      | ADMIN                  | Dashboard, manajemen akun internal                    |
-| `/dokter`                                                        | DOCTOR                 | Dashboard kerangka                                    |
-| `/staf` + `/staf/pendaftaran`, `/staf/farmasi`, `/staf/kasir`    | STAFF sesuai staffType | Dashboard kerangka per tipe staf                      |
+| `/dokter`                                                        | DOCTOR                 | Dashboard dokter, daftar pasien, dan form SOAP        |
+| `/staf`                                                          | STAFF sesuai staffType | Dashboard staf                                        |
+| `/staf/pendaftaran`                                              | STAFF (REGISTRATION)   | Jadwal dokter, permintaan janji, approve/reject, reschedule |
+| `/staf/farmasi`                                                  | STAFF (PHARMACY)       | Dashboard farmasi, e-resep, etiket, penyerahan obat   |
+| `/staf/kasir`                                                    | STAFF (CASHIER)        | Placeholder kasir (tahap berikutnya)                  |
 | `/pasien`                                                        | PATIENT                | Beranda: pemilih pasien aktif, kartu pasien, pintasan |
 | `/pasien/keluarga`, `/pasien/keluarga/[id]`                      | PATIENT                | Akun keluarga (maks. 10 anggota)                      |
-| `/pasien/janji`, `/pasien/antrean`, `/pasien/riwayat`            | PATIENT                | Placeholder "Segera hadir" (Tahap 3 & 4)              |
+| `/pasien/janji`                                                  | PATIENT                | Booking janji temu dokter, cek kuota sesi, dan daftar janji |
+| `/pasien/antrean`, `/pasien/riwayat`                             | PATIENT                | Placeholder "Segera hadir" (tahap berikutnya)         |
 | `/pasien/profil`                                                 | PATIENT                | Ubah profil, ganti password, keluar                   |
 | `/_design`                                                       | development saja       | Living style guide semua komponen                     |
 
@@ -118,6 +122,7 @@ src/
     layout/          sidebar, topbar, bottom nav, brand, 403
     landing/         komponen landing page
   features/
+    appointments/    jadwal dokter, kuota, booking, approve/reject, reschedule
     auth/            actions, schemas, queries, komponen form
     patients/        actions, queries, schemas, service, mrn (nomor RM), komponen
     users/           akun internal (admin)

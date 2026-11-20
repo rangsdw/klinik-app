@@ -8,7 +8,7 @@ test.afterAll(async () => {
 
 const ROLE_HOMES = [
   { email: "admin@klinik.test", url: /\/admin$/, heading: "Dashboard admin" },
-  { email: "dokter1@klinik.test", url: /\/dokter$/, heading: /Selamat bertugas/ },
+  { email: "dokter1@klinik.test", url: /\/dokter$/, heading: /Selamat bertugas/i },
   { email: "pendaftaran@klinik.test", url: /\/staf\/pendaftaran$/, heading: "Pendaftaran" },
   { email: "farmasi@klinik.test", url: /\/staf\/farmasi$/, heading: "Farmasi" },
   { email: "kasir@klinik.test", url: /\/staf\/kasir$/, heading: "Kasir" },

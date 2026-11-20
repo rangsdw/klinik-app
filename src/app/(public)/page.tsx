@@ -16,6 +16,8 @@ import { QueueTicket } from "@/components/landing/queue-ticket";
 import { clinicConfig } from "@/config/clinic";
 import { auth } from "@/lib/auth";
 import { homeFor } from "@/lib/roles";
+import { getPublicDoctorSchedules } from "@/features/appointments/queries";
+import { DAY_DISPLAY_ORDER, DAY_LABEL } from "@/features/appointments/schemas";
 
 const STEPS = [
   { title: "Daftar", text: "Satu akun untuk Anda dan keluarga." },
@@ -44,10 +46,16 @@ const SERVICES = [
 ];
 
 export default async function HomePage() {
-  const session = await auth();
+  const [session, schedules] = await Promise.all([auth(), getPublicDoctorSchedules()]);
   const dashboardHref = session?.user?.role
     ? homeFor(session.user.role, session.user.staffType)
     : null;
+  const orderedSchedules = [...schedules].sort((a, b) => {
+    const orderDiff =
+      DAY_DISPLAY_ORDER.indexOf(a.dayOfWeek as (typeof DAY_DISPLAY_ORDER)[number]) -
+      DAY_DISPLAY_ORDER.indexOf(b.dayOfWeek as (typeof DAY_DISPLAY_ORDER)[number]);
+    return orderDiff !== 0 ? orderDiff : a.startTime.localeCompare(b.startTime);
+  });
   const contact = [
     { icon: Clock, label: "Jam buka", value: clinicConfig.hours },
     { icon: MapPin, label: "Alamat", value: clinicConfig.address },
@@ -188,16 +196,35 @@ export default async function HomePage() {
                   </th>
                 </tr>
               </thead>
-              <tbody>
-                <tr>
-                  <td colSpan={3} className="px-6 py-14 text-center">
-                    <CalendarDays aria-hidden="true" className="text-primary-700 mx-auto size-8" />
-                    <p className="text-ink-strong mt-3 font-semibold">Jadwal sedang disiapkan</p>
-                    <p className="text-ink-muted mt-1">
-                      Jadwal praktik tampil di sini begitu klinik mengisinya.
-                    </p>
-                  </td>
-                </tr>
+              <tbody className="divide-line divide-y">
+                {orderedSchedules.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="px-6 py-14 text-center">
+                      <CalendarDays aria-hidden="true" className="text-primary-700 mx-auto size-8" />
+                      <p className="text-ink-strong mt-3 font-semibold">Jadwal sedang disiapkan</p>
+                      <p className="text-ink-muted mt-1">
+                        Jadwal praktik tampil di sini begitu klinik mengisinya.
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                  orderedSchedules.map((s) => (
+                    <tr key={s.id}>
+                      <td className="text-ink-strong px-6 py-4 font-medium">
+                        <div>{s.doctorName}</div>
+                        <div className="text-ink-muted mt-0.5 text-sm sm:hidden">
+                          {DAY_LABEL[s.dayOfWeek]}, {s.startTime}–{s.endTime} WIB
+                        </div>
+                      </td>
+                      <td className="text-ink hidden px-6 py-4 sm:table-cell">
+                        {DAY_LABEL[s.dayOfWeek]}
+                      </td>
+                      <td className="text-ink hidden px-6 py-4 sm:table-cell">
+                        {s.startTime}–{s.endTime} WIB
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
