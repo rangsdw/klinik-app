@@ -9,9 +9,11 @@ import {
   bookAppointmentSchema,
   doctorScheduleSchema,
   rejectAppointmentSchema,
+  rescheduleAppointmentSchema,
   type BookAppointmentInput,
   type DoctorScheduleInput,
   type RejectAppointmentInput,
+  type RescheduleAppointmentInput,
 } from "@/features/appointments/schemas";
 import {
   getAvailableSessionsForDate,
@@ -28,6 +30,7 @@ import {
   PatientNotOwnedError,
   QuotaFullError,
   rejectAppointmentByStaff,
+  rescheduleAppointmentByStaff,
   ScheduleOverlapError,
   validateBookingDate,
 } from "@/features/appointments/service";
@@ -336,6 +339,64 @@ export async function rejectAppointmentAction(
     };
   } catch (error) {
     if (error instanceof InvalidAppointmentStateError) {
+      return { ok: false, message: error.message };
+    }
+    throw error;
+  }
+}
+
+export async function getStaffAvailableSessionsAction(
+  doctorId: string,
+  dateStr: string,
+): Promise<ActionResult<AvailableSessionSlot[]>> {
+  await requireStaffType("REGISTRATION");
+  if (!doctorId) {
+    return { ok: false, message: "Pilih dokter terlebih dahulu." };
+  }
+  try {
+    validateBookingDate(dateStr);
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Tanggal janji tidak valid.",
+    };
+  }
+
+  const sessions = await getAvailableSessionsForDate(doctorId, dateStr);
+  return { ok: true, data: sessions };
+}
+
+export async function rescheduleAppointmentAction(
+  input: RescheduleAppointmentInput,
+): Promise<ActionResult<{ queueNumber: number | null; formattedQueueNumber: string | null }>> {
+  const staff = await requireStaffType("REGISTRATION");
+
+  const parsed = rescheduleAppointmentSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, fieldErrors: firstErrors(parsed.error.flatten().fieldErrors) };
+  }
+
+  try {
+    const res = await rescheduleAppointmentByStaff(staff.id, parsed.data);
+    revalidateAppointmentPages();
+    const queueInfo = res.formattedQueueNumber
+      ? ` Nomor antrean baru: ${res.formattedQueueNumber}.`
+      : "";
+    return {
+      ok: true,
+      message: `Janji temu berhasil dijadwalkan ulang.${queueInfo}`,
+      data: {
+        queueNumber: res.queueNumber,
+        formattedQueueNumber: res.formattedQueueNumber,
+      },
+    };
+  } catch (error) {
+    if (
+      error instanceof QuotaFullError ||
+      error instanceof DuplicateAppointmentError ||
+      error instanceof InvalidBookingDateError ||
+      error instanceof InvalidAppointmentStateError
+    ) {
       return { ok: false, message: error.message };
     }
     throw error;

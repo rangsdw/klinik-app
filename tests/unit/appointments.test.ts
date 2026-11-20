@@ -4,6 +4,7 @@ import {
   doctorScheduleSchema,
   formatQueueNumber,
   rejectAppointmentSchema,
+  rescheduleAppointmentSchema,
 } from "@/features/appointments/schemas";
 import {
   assertValidScheduleSlot,
@@ -179,6 +180,28 @@ describe("formatQueueNumber & rejectAppointmentSchema", () => {
       rejectAppointmentSchema.safeParse({
         appointmentId: "app-1",
         reason: "Dokter berhalangan hadir karena tugas luar",
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe("rescheduleAppointmentSchema", () => {
+  it("memvalidasi tanggal, sesi tujuan, dan alasan minimal 5 karakter", () => {
+    expect(
+      rescheduleAppointmentSchema.safeParse({
+        appointmentId: "app-1",
+        scheduleId: "sch-2",
+        appointmentDate: "2026-11-23",
+        reason: "Dok",
+      }).success,
+    ).toBe(false);
+
+    expect(
+      rescheduleAppointmentSchema.safeParse({
+        appointmentId: "app-1",
+        scheduleId: "sch-2",
+        appointmentDate: "2026-11-23",
+        reason: "Dokter berhalangan hadir pada tanggal awal",
       }).success,
     ).toBe(true);
   });

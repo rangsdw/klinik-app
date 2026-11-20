@@ -109,6 +109,8 @@ Menyimpan jadwal dan sesi pemeriksaan antara pasien dengan dokter.
 | status | enum AppointmentStatus | PENDING, CONFIRMED, IN_PROGRESS, COMPLETED, CANCELLED, NO_SHOW, REJECTED |
 | chief_complaint | text | Keluhan utama / alasan berobat pasien |
 | rejection_reason | text | nullable; alasan penolakan janji oleh staf pendaftaran |
+| rescheduled_at | datetime | nullable; waktu terakhir janji dijadwalkan ulang oleh staf |
+| reschedule_note | text | nullable; alasan penjadwalan ulang dari staf pendaftaran |
 | created_at, updated_at | datetime | |
 
 ### `appointment_histories` (AppointmentHistory)

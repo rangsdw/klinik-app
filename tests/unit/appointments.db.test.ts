@@ -12,6 +12,7 @@ import {
   PatientNotOwnedError,
   QuotaFullError,
   rejectAppointmentByStaff,
+  rescheduleAppointmentByStaff,
 } from "@/features/appointments/service";
 import { getAvailableSessionsForDate } from "@/features/appointments/queries";
 
@@ -422,5 +423,130 @@ describe("booking janji & kuota (database)", () => {
       today,
     );
     expect(rebooked.status).toBe("PENDING");
+  });
+
+  it("reschedule memindahkan kuota, menerbitkan antrean baru, dan menolak status tidak sah atau sesi penuh", async () => {
+    const nextDate = "2026-11-23";
+    const { doctor, schedule: slotToday } = await createDoctorAndSchedule(today, 1);
+    const slotNext = await db.doctorSchedule.create({
+      data: {
+        doctorId: doctor.id,
+        dayOfWeek: dayOfWeekFromDateStr(nextDate),
+        startTime: "13:00",
+        endTime: "16:00",
+        quota: 1,
+        isActive: true,
+      },
+    });
+
+    const staffHash = await bcrypt.hash("rahasia123", 4);
+    const staff = await db.user.create({
+      data: {
+        name: "Staf Reschedule",
+        email: "staf-reschedule@contoh.test",
+        phone: "081600000099",
+        passwordHash: staffHash,
+        role: "STAFF",
+        staffType: "REGISTRATION",
+        isActive: true,
+      },
+    });
+
+    const accA = await newPatientAccount();
+    const accB = await newPatientAccount();
+
+    const appA = await bookAppointmentForPatient(
+      accA.user.id,
+      {
+        patientId: accA.patient.id,
+        doctorId: doctor.id,
+        scheduleId: slotToday.id,
+        appointmentDate: today,
+        chiefComplaint: "Kontrol rutin awal",
+      },
+      today,
+    );
+
+    const approved = await approveAppointmentByStaff(staff.id, appA.id);
+    expect(approved.queueNumber).toBe(1);
+
+    // Reschedule janji CONFIRMED ke tanggal & sesi berikutnya
+    const rescheduled = await rescheduleAppointmentByStaff(
+      staff.id,
+      {
+        appointmentId: appA.id,
+        scheduleId: slotNext.id,
+        appointmentDate: nextDate,
+        reason: "Dokter ada kegiatan dinas pagi",
+      },
+      today,
+    );
+    expect(rescheduled.status).toBe("CONFIRMED");
+    expect(rescheduled.queueNumber).toBe(1);
+    expect(rescheduled.formattedQueueNumber).toBe("A-01");
+
+    const updated = await db.appointment.findUniqueOrThrow({ where: { id: appA.id } });
+    expect(updated.scheduleId).toBe(slotNext.id);
+    expect(updated.rescheduledAt).not.toBeNull();
+    expect(updated.rescheduleNote).toBe("Dokter ada kegiatan dinas pagi");
+
+    const histories = await db.appointmentHistory.findMany({
+      where: { appointmentId: appA.id },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(histories).toHaveLength(3);
+    expect(histories[2]?.notes).toContain("2026-11-20");
+    expect(histories[2]?.notes).toContain("2026-11-23");
+    expect(histories[2]?.notes).toContain("Dokter ada kegiatan dinas pagi");
+    expect(histories[2]?.changedByUserId).toBe(staff.id);
+
+    // Kuota tanggal lama kembali tersedia, sementara kuota tanggal baru sudah terpakai
+    const todaySlots = await getAvailableSessionsForDate(doctor.id, today);
+    const nextSlots = await getAvailableSessionsForDate(doctor.id, nextDate);
+    expect(todaySlots[0]?.remaining).toBe(1);
+    expect(nextSlots[0]?.remaining).toBe(0);
+
+    // Pasien B booking pada slot lama (berhasil), lalu coba reschedule ke slotNext yang sudah penuh -> ditolak
+    const appB = await bookAppointmentForPatient(
+      accB.user.id,
+      {
+        patientId: accB.patient.id,
+        doctorId: doctor.id,
+        scheduleId: slotToday.id,
+        appointmentDate: today,
+        chiefComplaint: "Pasien kedua di hari awal",
+      },
+      today,
+    );
+    await expect(
+      rescheduleAppointmentByStaff(
+        staff.id,
+        {
+          appointmentId: appB.id,
+          scheduleId: slotNext.id,
+          appointmentDate: nextDate,
+          reason: "Pindah ke hari penuh",
+        },
+        today,
+      ),
+    ).rejects.toBeInstanceOf(QuotaFullError);
+
+    // Tolak janji appB lalu pastikan janji REJECTED tidak bisa di-reschedule
+    await rejectAppointmentByStaff(staff.id, {
+      appointmentId: appB.id,
+      reason: "Jadwal penuh tidak memungkinkan",
+    });
+    await expect(
+      rescheduleAppointmentByStaff(
+        staff.id,
+        {
+          appointmentId: appB.id,
+          scheduleId: slotToday.id,
+          appointmentDate: "2026-11-27",
+          reason: "Mencoba reschedule setelah ditolak",
+        },
+        today,
+      ),
+    ).rejects.toBeInstanceOf(InvalidAppointmentStateError);
   });
 });

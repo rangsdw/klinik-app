@@ -183,6 +183,8 @@ model Appointment {
   status          AppointmentStatus @default(PENDING)
   chiefComplaint  String?           @map("chief_complaint") @db.Text
   rejectionReason String?           @map("rejection_reason") @db.Text
+  rescheduledAt   DateTime?         @map("rescheduled_at")
+  rescheduleNote  String?           @map("reschedule_note") @db.Text
   createdAt       DateTime          @default(now()) @map("created_at")
   updatedAt       DateTime          @updatedAt @map("updated_at")
 

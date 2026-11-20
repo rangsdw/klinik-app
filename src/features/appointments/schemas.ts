@@ -122,3 +122,16 @@ export const rejectAppointmentSchema = z.object({
 
 export type RejectAppointmentInput = z.infer<typeof rejectAppointmentSchema>;
 
+export const rescheduleAppointmentSchema = z.object({
+  appointmentId: z.string().trim().min(1, "ID janji temu wajib diisi"),
+  scheduleId: z.string().trim().min(1, "Pilih sesi jadwal tujuan"),
+  appointmentDate: z.string().trim().regex(DATE_REGEX, "Format tanggal tidak valid"),
+  reason: z
+    .string()
+    .trim()
+    .min(5, "Alasan penjadwalan ulang minimal 5 karakter")
+    .max(500, "Alasan penjadwalan ulang maksimal 500 karakter"),
+});
+
+export type RescheduleAppointmentInput = z.infer<typeof rescheduleAppointmentSchema>;
+

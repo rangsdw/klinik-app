@@ -16,6 +16,7 @@ import {
   MAX_BOOKING_DAYS_AHEAD,
   type BookAppointmentInput,
   type RejectAppointmentInput,
+  type RescheduleAppointmentInput,
 } from "@/features/appointments/schemas";
 
 export type TimeSlot = {
@@ -332,7 +333,7 @@ export async function notifyAppointmentStatus(params: {
   doctorName: string;
   dateStr: string;
   startTime: string;
-  status: "CONFIRMED" | "REJECTED";
+  status: "CONFIRMED" | "REJECTED" | "RESCHEDULED";
   queueNumber?: number;
   reason?: string;
 }): Promise<void> {
@@ -481,4 +482,173 @@ export async function rejectAppointmentByStaff(
   });
 
   return result.updated;
+}
+
+/**
+ * Jadwalkan ulang janji PENDING atau CONFIRMED ke tanggal/sesi aktif lain yang masih memiliki kuota.
+ * Jika janji sudah CONFIRMED, terbitkan nomor antrean baru untuk tanggal tujuan.
+ */
+export async function rescheduleAppointmentByStaff(
+  staffUserId: string,
+  input: RescheduleAppointmentInput,
+  todayStr: string = jakartaTodayStr(),
+) {
+  const reason = input.reason.trim();
+  if (reason.length < 5) {
+    throw new InvalidAppointmentStateError("Alasan penjadwalan ulang minimal 5 karakter.");
+  }
+
+  validateBookingDate(input.appointmentDate, todayStr);
+  const targetDate = parseDateOnlyUtc(input.appointmentDate);
+  const expectedDay = dayOfWeekFromDateStr(input.appointmentDate);
+
+  const result = await db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM appointments WHERE id = ${input.appointmentId} FOR UPDATE`;
+
+    const appointment = await tx.appointment.findUnique({
+      where: { id: input.appointmentId },
+      include: {
+        patient: { select: { id: true, name: true } },
+        doctor: { select: { id: true, name: true } },
+      },
+    });
+
+    if (!appointment) {
+      throw new InvalidAppointmentStateError("Janji temu tidak ditemukan.");
+    }
+
+    if (appointment.status !== "PENDING" && appointment.status !== "CONFIRMED") {
+      throw new InvalidAppointmentStateError(
+        "Hanya janji berstatus Menunggu Persetujuan atau Disetujui yang dapat dijadwalkan ulang.",
+      );
+    }
+
+    await tx.$queryRaw`SELECT id FROM doctor_schedules WHERE id = ${input.scheduleId} FOR UPDATE`;
+
+    const targetSchedule = await tx.doctorSchedule.findUnique({
+      where: { id: input.scheduleId },
+      include: {
+        doctor: { select: { id: true, name: true, role: true, isActive: true } },
+      },
+    });
+
+    if (
+      !targetSchedule ||
+      !targetSchedule.isActive ||
+      targetSchedule.doctor.role !== "DOCTOR" ||
+      !targetSchedule.doctor.isActive ||
+      targetSchedule.dayOfWeek !== expectedDay
+    ) {
+      throw new InvalidBookingDateError(
+        "Sesi jadwal tujuan tidak aktif atau tidak sesuai dengan hari yang dipilih.",
+      );
+    }
+
+    const oldDateStr = toDateInput(appointment.appointmentDate);
+    const sameSession =
+      oldDateStr === input.appointmentDate &&
+      (appointment.scheduleId === targetSchedule.id ||
+        (appointment.doctorId === targetSchedule.doctorId &&
+          appointment.startTime === targetSchedule.startTime &&
+          appointment.endTime === targetSchedule.endTime));
+    if (sameSession) {
+      throw new InvalidBookingDateError("Pilih tanggal atau sesi yang berbeda dari jadwal saat ini.");
+    }
+
+    const duplicate = await tx.appointment.findFirst({
+      where: {
+        id: { not: appointment.id },
+        patientId: appointment.patientId,
+        doctorId: targetSchedule.doctorId,
+        appointmentDate: targetDate,
+        status: { in: ["PENDING", "CONFIRMED", "IN_PROGRESS"] },
+      },
+      select: { id: true },
+    });
+    if (duplicate) {
+      throw new DuplicateAppointmentError(
+        "Pasien sudah memiliki janji aktif lain pada dokter dan tanggal tujuan.",
+      );
+    }
+
+    const usedCount = await tx.appointment.count({
+      where: {
+        id: { not: appointment.id },
+        doctorId: targetSchedule.doctorId,
+        appointmentDate: targetDate,
+        status: { in: [...ACTIVE_QUOTA_STATUSES] },
+        OR: [
+          { scheduleId: targetSchedule.id },
+          {
+            scheduleId: null,
+            startTime: targetSchedule.startTime,
+            endTime: targetSchedule.endTime,
+          },
+        ],
+      },
+    });
+
+    if (usedCount >= targetSchedule.quota) {
+      throw new QuotaFullError("Kuota sesi tujuan sudah penuh.");
+    }
+
+    const newQueueNumber =
+      appointment.status === "CONFIRMED"
+        ? await nextQueueNumber(tx, targetSchedule.doctorId, input.appointmentDate)
+        : null;
+
+    const updated = await tx.appointment.update({
+      where: { id: appointment.id },
+      data: {
+        doctorId: targetSchedule.doctorId,
+        scheduleId: targetSchedule.id,
+        appointmentDate: targetDate,
+        startTime: targetSchedule.startTime,
+        endTime: targetSchedule.endTime,
+        queueNumber: newQueueNumber,
+        rescheduledAt: new Date(),
+        rescheduleNote: reason,
+      },
+    });
+
+    const queueNote =
+      newQueueNumber !== null ? ` (Antrean baru: ${formatQueueNumber(newQueueNumber)})` : "";
+
+    await tx.appointmentHistory.create({
+      data: {
+        appointmentId: appointment.id,
+        status: appointment.status,
+        notes: `Dijadwalkan ulang dari ${oldDateStr} (${appointment.startTime}–${appointment.endTime}) ke ${input.appointmentDate} (${targetSchedule.startTime}–${targetSchedule.endTime}). Alasan: ${reason}${queueNote}`,
+        changedByUserId: staffUserId,
+      },
+    });
+
+    return {
+      id: updated.id,
+      status: updated.status,
+      queueNumber: newQueueNumber,
+      formattedQueueNumber: newQueueNumber !== null ? formatQueueNumber(newQueueNumber) : null,
+      patientName: appointment.patient.name,
+      doctorName: targetSchedule.doctor.name,
+      startTime: targetSchedule.startTime,
+    };
+  });
+
+  await notifyAppointmentStatus({
+    appointmentId: result.id,
+    patientName: result.patientName,
+    doctorName: result.doctorName,
+    dateStr: input.appointmentDate,
+    startTime: result.startTime,
+    status: "RESCHEDULED",
+    queueNumber: result.queueNumber ?? undefined,
+    reason,
+  });
+
+  return {
+    id: result.id,
+    status: result.status,
+    queueNumber: result.queueNumber,
+    formattedQueueNumber: result.formattedQueueNumber,
+  };
 }

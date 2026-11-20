@@ -541,6 +541,9 @@ export function PatientBookingView({
                         <StatusBadge variant={APPOINTMENT_STATUS_VARIANT[statusKey]}>
                           {APPOINTMENT_STATUS_LABEL[statusKey]}
                         </StatusBadge>
+                        {item.rescheduledAt ? (
+                          <StatusBadge variant="info">Dijadwalkan Ulang</StatusBadge>
+                        ) : null}
                         {item.queueNumber !== null ? (
                           <StatusBadge variant="neutral">
                             Antrean {formatQueueNumber(item.queueNumber)}
@@ -565,6 +568,12 @@ export function PatientBookingView({
 
                       {item.chiefComplaint ? (
                         <p className="text-ink-muted text-sm">Keluhan: {item.chiefComplaint}</p>
+                      ) : null}
+
+                      {item.rescheduledAt && item.rescheduleNote ? (
+                        <p className="border-info/30 bg-info-soft text-info-ink rounded-lg border px-3 py-2 text-sm">
+                          Dijadwalkan ulang oleh klinik: {item.rescheduleNote}
+                        </p>
                       ) : null}
 
                       {item.status === "REJECTED" && item.rejectionReason ? (

@@ -167,6 +167,8 @@ export type PatientAppointmentRow = {
   status: AppointmentStatus;
   chiefComplaint: string | null;
   rejectionReason: string | null;
+  rescheduledAt: Date | null;
+  rescheduleNote: string | null;
   createdAt: Date;
 };
 
@@ -202,6 +204,8 @@ export async function listAppointmentsForAccount(
     status: r.status,
     chiefComplaint: r.chiefComplaint,
     rejectionReason: r.rejectionReason,
+    rescheduledAt: r.rescheduledAt,
+    rescheduleNote: r.rescheduleNote,
     createdAt: r.createdAt,
   }));
 }
@@ -228,6 +232,8 @@ export type StaffAppointmentRequestRow = {
   status: AppointmentStatus;
   chiefComplaint: string | null;
   rejectionReason: string | null;
+  rescheduledAt: Date | null;
+  rescheduleNote: string | null;
   createdAt: Date;
   sessionQuota: number | null;
   sessionUsed: number;
@@ -300,6 +306,8 @@ export async function getStaffAppointmentRequestsData(
       status: r.status,
       chiefComplaint: r.chiefComplaint,
       rejectionReason: r.rejectionReason,
+      rescheduledAt: r.rescheduledAt,
+      rescheduleNote: r.rescheduleNote,
       createdAt: r.createdAt,
       sessionQuota: quota,
       sessionUsed,

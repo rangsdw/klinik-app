@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import { CalendarClock, CalendarDays } from "lucide-react";
 import { requireStaffType } from "@/lib/rbac";
+import { addDaysToDateStr, jakartaTodayStr } from "@/lib/date";
 import { PageHeader } from "@/components/ui-kit/page-header";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { MAX_BOOKING_DAYS_AHEAD } from "@/features/appointments/schemas";
 import {
   getDoctorOptions,
   getDoctorSchedules,
@@ -15,10 +17,13 @@ export const metadata: Metadata = { title: "Pendaftaran" };
 
 export default async function RegistrationPage() {
   await requireStaffType("REGISTRATION");
+  const todayStr = jakartaTodayStr();
+  const maxDateStr = addDaysToDateStr(todayStr, MAX_BOOKING_DAYS_AHEAD);
+
   const [schedules, doctors, requestsData] = await Promise.all([
     getDoctorSchedules(),
     getDoctorOptions(),
-    getStaffAppointmentRequestsData(),
+    getStaffAppointmentRequestsData(todayStr),
   ]);
 
   return (
@@ -54,6 +59,9 @@ export default async function RegistrationPage() {
             requests={requestsData.requests}
             stats={requestsData.stats}
             doctors={doctors}
+            doctorSchedules={schedules}
+            todayStr={todayStr}
+            maxDateStr={maxDateStr}
           />
         </TabsContent>
       </Tabs>
