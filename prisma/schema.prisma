@@ -191,6 +191,11 @@ model AppointmentHistory {
 // ============================================================
 
 model MedicalRecord {
+  pharmacyStatus PharmacyStatus @default(WAITING) @map("pharmacy_status")
+  pharmacyReceivedAt DateTime? @map("pharmacy_received_at")
+  pharmacyReadyAt DateTime? @map("pharmacy_ready_at")
+  pharmacyDispensedAt DateTime? @map("pharmacy_dispensed_at")
+  pharmacyDispensedBy String? @map("pharmacy_dispensed_by")
   id              String             @id @default(cuid())
   appointmentId   String             @unique @map("appointment_id")
   patientId       String             @map("patient_id")
@@ -253,4 +258,12 @@ model PrescriptionItem {
   @@index([medicalRecordId])
   @@index([medicineId])
   @@map("prescription_items")
+}
+
+
+enum PharmacyStatus {
+  WAITING
+  PROCESSING
+  READY
+  DISPENSED
 }
