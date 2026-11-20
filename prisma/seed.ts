@@ -254,6 +254,45 @@ async function main() {
     }
   }
 
+  // Seed Jadwal Praktik Dokter 1 & Dokter 2 (idempoten)
+  const doctor2 = await db.user.findUnique({ where: { email: "dokter2@klinik.test" } });
+  const DEMO_SCHEDULES: Array<{
+    doctorId: string;
+    dayOfWeek: number;
+    startTime: string;
+    endTime: string;
+    quota: number;
+  }> = [];
+
+  if (doctor) {
+    DEMO_SCHEDULES.push(
+      { doctorId: doctor.id, dayOfWeek: 1, startTime: "08:00", endTime: "12:00", quota: 15 },
+      { doctorId: doctor.id, dayOfWeek: 3, startTime: "08:00", endTime: "12:00", quota: 15 },
+      { doctorId: doctor.id, dayOfWeek: 5, startTime: "08:00", endTime: "11:30", quota: 12 },
+    );
+  }
+  if (doctor2) {
+    DEMO_SCHEDULES.push(
+      { doctorId: doctor2.id, dayOfWeek: 2, startTime: "13:00", endTime: "17:00", quota: 15 },
+      { doctorId: doctor2.id, dayOfWeek: 4, startTime: "13:00", endTime: "17:00", quota: 15 },
+      { doctorId: doctor2.id, dayOfWeek: 6, startTime: "09:00", endTime: "13:00", quota: 12 },
+    );
+  }
+
+  for (const s of DEMO_SCHEDULES) {
+    const existing = await db.doctorSchedule.findFirst({
+      where: {
+        doctorId: s.doctorId,
+        dayOfWeek: s.dayOfWeek,
+        startTime: s.startTime,
+        endTime: s.endTime,
+      },
+    });
+    if (!existing) {
+      await db.doctorSchedule.create({ data: { ...s, isActive: true } });
+    }
+  }
+
   console.info("Seeder selesai:", counts.map((c) => `${c.role}=${c._count._all}`).join(", "));
   console.info(`Password akun demo: ${DEMO_PASSWORD} (hanya lokal)`);
 }

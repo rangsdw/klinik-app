@@ -81,6 +81,19 @@ Nomor RM dibuat di `src/features/patients/mrn.ts` dengan satu statement `INSERT 
 
 ## Tabel Modul Dokter & Rekam Medis (Tahap 3 & Rekam Medis)
 
+### `doctor_schedules` (DoctorSchedule)
+Menyimpan sesi jadwal praktik dokter per hari beserta kuota maksimal pasien.
+
+| Kolom | Tipe | Catatan |
+| ----- | ---- | ------- |
+| id | varchar (cuid) | PK |
+| doctor_id | varchar | FK ke `users.id` (cascade), index |
+| day_of_week | int | 0 = Minggu .. 6 = Sabtu |
+| start_time, end_time | varchar(5) | Format "HH:mm" (misal "08:00") |
+| quota | int | Kuota maksimal pasien per sesi |
+| is_active | boolean | default true; nonaktif tanpa hapus permanen |
+| created_at, updated_at | datetime | |
+
 ### `appointments` (Appointment)
 Menyimpan jadwal dan sesi pemeriksaan antara pasien dengan dokter.
 

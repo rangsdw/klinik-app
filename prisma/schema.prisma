@@ -70,6 +70,7 @@ model User {
 
   patients            Patient[]
   passwordResetTokens PasswordResetToken[]
+  doctorSchedules     DoctorSchedule[]     @relation("DoctorSchedules")
   doctorAppointments  Appointment[]        @relation("DoctorAppointments")
   doctorRecords       MedicalRecord[]      @relation("DoctorRecords")
 
@@ -139,6 +140,25 @@ model Patient {
 // ============================================================
 // JADWAL, APPOINTMENT, ANTREAN (Rangga — Tahap 3 & 4)
 // ============================================================
+
+model DoctorSchedule {
+  id        String   @id @default(cuid())
+  doctorId  String   @map("doctor_id")
+  /// 0 = Minggu .. 6 = Sabtu
+  dayOfWeek Int      @map("day_of_week")
+  startTime String   @map("start_time") @db.VarChar(5)
+  endTime   String   @map("end_time") @db.VarChar(5)
+  quota     Int
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  doctor User @relation("DoctorSchedules", fields: [doctorId], references: [id], onDelete: Cascade)
+
+  @@index([doctorId])
+  @@index([dayOfWeek, isActive])
+  @@map("doctor_schedules")
+}
 
 enum AppointmentStatus {
   PENDING
