@@ -102,9 +102,10 @@ Menyimpan jadwal dan sesi pemeriksaan antara pasien dengan dokter.
 | id | varchar (cuid) | PK |
 | patient_id | varchar | FK ke `patients.id` (cascade), index |
 | doctor_id | varchar | FK ke `users.id` (dokter) |
+| schedule_id | varchar | nullable; FK ke `doctor_schedules.id` (`onDelete: SetNull`), index `(schedule_id, appointment_date)` |
 | appointment_date | date | Tanggal janji temu |
 | start_time, end_time | varchar(5) | Format "HH:mm" (misal "09:00") |
-| queue_number | int | Nomor antrean harian dokter |
+| queue_number | int | nullable (`NULL` saat `PENDING`, diisi saat disetujui pada Langkah 3) |
 | status | enum AppointmentStatus | PENDING, CONFIRMED, IN_PROGRESS, COMPLETED, CANCELLED, NO_SHOW |
 | chief_complaint | text | Keluhan utama / alasan berobat pasien |
 | created_at, updated_at | datetime | |

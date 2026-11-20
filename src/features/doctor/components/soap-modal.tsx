@@ -40,7 +40,7 @@ type Props = {
   onOpenChange: (open: boolean) => void;
   appointment: {
     id: string;
-    queueNumber: number;
+    queueNumber: number | null;
     chiefComplaint: string | null;
     patient: {
       id: string;
@@ -178,7 +178,7 @@ export function SoapModal({ open, onOpenChange, appointment, availableMedicines 
                 Rekam Medis & Form SOAP
               </DialogTitle>
               <DialogDescription className="mt-1 text-sm text-ink-soft">
-                Antrean #{appointment.queueNumber} · {appointment.patient.name} (RM:{" "}
+                Antrean #{appointment.queueNumber ?? "-"} · {appointment.patient.name} (RM:{" "}
                 <span className="font-mono font-medium text-ink-strong">
                   {appointment.patient.medicalRecordNumber}
                 </span>

@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { doctorScheduleSchema } from "@/features/appointments/schemas";
+import { bookAppointmentSchema, doctorScheduleSchema } from "@/features/appointments/schemas";
 import {
   assertValidScheduleSlot,
+  getQuotaStatus,
+  InvalidBookingDateError,
   ScheduleOverlapError,
   schedulesOverlap,
+  validateBookingDate,
 } from "@/features/appointments/service";
 
 describe("doctorScheduleSchema", () => {
@@ -79,5 +82,74 @@ describe("validasi tumpang tindih sesi jadwal", () => {
         "slot-1",
       ),
     ).not.toThrow();
+  });
+});
+
+describe("validasi tanggal booking", () => {
+  const today = "2026-11-20";
+
+  it("menerima hari ini dan maksimal 30 hari ke depan", () => {
+    expect(() => validateBookingDate("2026-11-20", today)).not.toThrow();
+    expect(() => validateBookingDate("2026-12-20", today)).not.toThrow();
+  });
+
+  it("menolak tanggal lampau", () => {
+    expect(() => validateBookingDate("2026-11-19", today)).toThrow(InvalidBookingDateError);
+  });
+
+  it("menolak tanggal lebih dari 30 hari ke depan", () => {
+    expect(() => validateBookingDate("2026-12-21", today)).toThrow(InvalidBookingDateError);
+  });
+
+  it("menolak format tanggal yang tidak valid", () => {
+    expect(() => validateBookingDate("20-11-2026", today)).toThrow(InvalidBookingDateError);
+    expect(() => validateBookingDate("2026-02-30", today)).toThrow(InvalidBookingDateError);
+  });
+});
+
+describe("indikator status kuota", () => {
+  it("mengembalikan status Tersedia, Hampir Penuh, dan Penuh", () => {
+    expect(getQuotaStatus(2, 10)).toEqual({
+      remaining: 8,
+      percentage: 20,
+      status: "AVAILABLE",
+      label: "Tersedia",
+    });
+    expect(getQuotaStatus(8, 10)).toEqual({
+      remaining: 2,
+      percentage: 80,
+      status: "ALMOST_FULL",
+      label: "Hampir Penuh",
+    });
+    expect(getQuotaStatus(10, 10)).toEqual({
+      remaining: 0,
+      percentage: 100,
+      status: "FULL",
+      label: "Penuh",
+    });
+  });
+});
+
+describe("bookAppointmentSchema", () => {
+  it("memvalidasi keluhan minimal 3 karakter dan format tanggal", () => {
+    expect(
+      bookAppointmentSchema.safeParse({
+        patientId: "pat-1",
+        doctorId: "doc-1",
+        scheduleId: "sch-1",
+        appointmentDate: "2026-11-20",
+        chiefComplaint: "Demam sejak kemarin",
+      }).success,
+    ).toBe(true);
+
+    expect(
+      bookAppointmentSchema.safeParse({
+        patientId: "pat-1",
+        doctorId: "doc-1",
+        scheduleId: "sch-1",
+        appointmentDate: "2026-11-20",
+        chiefComplaint: "ab",
+      }).success,
+    ).toBe(false);
   });
 });

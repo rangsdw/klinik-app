@@ -34,7 +34,7 @@ type Props = {
     endTime: string;
     status: AppointmentStatus;
     patientName: string;
-    queueNumber: number;
+    queueNumber: number | null;
   };
 };
 
@@ -78,7 +78,7 @@ export function EditScheduleDialog({ open, onOpenChange, appointment }: Props) {
         <DialogHeader>
           <DialogTitle>Ubah Jadwal Janji Temu</DialogTitle>
           <DialogDescription>
-            Atur ulang tanggal, jam, atau status untuk antrean #{appointment.queueNumber} (
+            Atur ulang tanggal, jam, atau status untuk antrean #{appointment.queueNumber ?? "-"} (
             {appointment.patientName}).
           </DialogDescription>
         </DialogHeader>

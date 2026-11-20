@@ -154,6 +154,7 @@ model DoctorSchedule {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   doctor User @relation("DoctorSchedules", fields: [doctorId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
 
   @@index([doctorId])
   @@index([dayOfWeek, isActive])
@@ -173,10 +174,11 @@ model Appointment {
   id              String            @id @default(cuid())
   patientId       String            @map("patient_id")
   doctorId        String            @map("doctor_id")
+  scheduleId      String?           @map("schedule_id")
   appointmentDate DateTime          @map("appointment_date") @db.Date
   startTime       String            @map("start_time") @db.VarChar(5)
   endTime         String            @map("end_time") @db.VarChar(5)
-  queueNumber     Int               @map("queue_number")
+  queueNumber     Int?              @map("queue_number")
   status          AppointmentStatus @default(PENDING)
   chiefComplaint  String?           @map("chief_complaint") @db.Text
   createdAt       DateTime          @default(now()) @map("created_at")
@@ -184,11 +186,13 @@ model Appointment {
 
   patient         Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
   doctor          User              @relation("DoctorAppointments", fields: [doctorId], references: [id])
+  schedule        DoctorSchedule?   @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
   histories       AppointmentHistory[]
   medicalRecord   MedicalRecord?
 
   @@index([patientId])
   @@index([doctorId, appointmentDate])
+  @@index([scheduleId, appointmentDate])
   @@map("appointments")
 }
 

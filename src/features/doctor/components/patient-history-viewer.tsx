@@ -42,7 +42,7 @@ type PatientItem = {
     appointmentDate: Date;
     startTime: string;
     endTime: string;
-    queueNumber: number;
+    queueNumber: number | null;
     status: AppointmentStatus;
     chiefComplaint: string | null;
     doctor: { name: string };

@@ -53,3 +53,53 @@ export const doctorScheduleSchema = z
   });
 
 export type DoctorScheduleInput = z.infer<typeof doctorScheduleSchema>;
+
+export const MAX_BOOKING_DAYS_AHEAD = 30;
+
+export const ACTIVE_QUOTA_STATUSES = ["PENDING", "CONFIRMED", "IN_PROGRESS", "COMPLETED"] as const;
+
+export type AppointmentStatusKey =
+  | "PENDING"
+  | "CONFIRMED"
+  | "IN_PROGRESS"
+  | "COMPLETED"
+  | "CANCELLED"
+  | "NO_SHOW";
+
+export const APPOINTMENT_STATUS_LABEL: Record<AppointmentStatusKey, string> = {
+  PENDING: "Menunggu Persetujuan",
+  CONFIRMED: "Disetujui",
+  IN_PROGRESS: "Sedang Diperiksa",
+  COMPLETED: "Selesai",
+  CANCELLED: "Dibatalkan",
+  NO_SHOW: "Tidak Hadir",
+};
+
+export const APPOINTMENT_STATUS_VARIANT: Record<
+  AppointmentStatusKey,
+  "success" | "warning" | "danger" | "info" | "neutral"
+> = {
+  PENDING: "warning",
+  CONFIRMED: "info",
+  IN_PROGRESS: "info",
+  COMPLETED: "success",
+  CANCELLED: "neutral",
+  NO_SHOW: "danger",
+};
+
+export const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+export const bookAppointmentSchema = z.object({
+  patientId: z.string().trim().min(1, "Pilih pasien"),
+  doctorId: z.string().trim().min(1, "Pilih dokter"),
+  scheduleId: z.string().trim().min(1, "Pilih sesi jadwal"),
+  appointmentDate: z.string().trim().regex(DATE_REGEX, "Format tanggal tidak valid"),
+  chiefComplaint: z
+    .string()
+    .trim()
+    .min(3, "Keluhan singkat minimal 3 karakter")
+    .max(500, "Keluhan maksimal 500 karakter"),
+});
+
+export type BookAppointmentInput = z.infer<typeof bookAppointmentSchema>;
+

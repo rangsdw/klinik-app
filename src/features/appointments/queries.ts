@@ -1,5 +1,10 @@
 import "server-only";
+import type { AppointmentStatus } from "@prisma/client";
 import { db } from "@/lib/db";
+import { dayOfWeekFromDateStr, parseDateOnlyUtc, toDateInput } from "@/lib/date";
+import { activePatientWhere } from "@/features/patients/queries";
+import { ACTIVE_QUOTA_STATUSES, DATE_REGEX } from "@/features/appointments/schemas";
+import { getQuotaStatus } from "@/features/appointments/service";
 
 export type DoctorOption = {
   id: string;
@@ -76,5 +81,125 @@ export async function getPublicDoctorSchedules(): Promise<DoctorScheduleRow[]> {
     endTime: r.endTime,
     quota: r.quota,
     isActive: r.isActive,
+  }));
+}
+
+export type AvailableSessionSlot = {
+  scheduleId: string;
+  doctorId: string;
+  doctorName: string;
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  quota: number;
+  used: number;
+  remaining: number;
+  percentage: number;
+  quotaStatus: "AVAILABLE" | "ALMOST_FULL" | "FULL";
+  quotaLabel: "Tersedia" | "Hampir Penuh" | "Penuh";
+};
+
+/** Ambil daftar sesi praktik aktif beserta sisa kuota untuk dokter & tanggal tertentu. */
+export async function getAvailableSessionsForDate(
+  doctorId: string,
+  dateStr: string,
+): Promise<AvailableSessionSlot[]> {
+  if (!doctorId || !DATE_REGEX.test(dateStr)) return [];
+
+  const dayOfWeek = dayOfWeekFromDateStr(dateStr);
+  const targetDate = parseDateOnlyUtc(dateStr);
+
+  const [schedules, bookedAppointments] = await Promise.all([
+    db.doctorSchedule.findMany({
+      where: {
+        doctorId,
+        dayOfWeek,
+        isActive: true,
+        doctor: { role: "DOCTOR", isActive: true },
+      },
+      include: { doctor: { select: { name: true } } },
+      orderBy: { startTime: "asc" },
+    }),
+    db.appointment.findMany({
+      where: {
+        doctorId,
+        appointmentDate: targetDate,
+        status: { in: [...ACTIVE_QUOTA_STATUSES] },
+      },
+      select: { id: true, scheduleId: true, startTime: true, endTime: true },
+    }),
+  ]);
+
+  return schedules.map((s) => {
+    const used = bookedAppointments.filter(
+      (a) =>
+        a.scheduleId === s.id ||
+        (a.scheduleId === null && a.startTime === s.startTime && a.endTime === s.endTime),
+    ).length;
+    const summary = getQuotaStatus(used, s.quota);
+    return {
+      scheduleId: s.id,
+      doctorId: s.doctorId,
+      doctorName: s.doctor.name,
+      dayOfWeek: s.dayOfWeek,
+      startTime: s.startTime,
+      endTime: s.endTime,
+      quota: s.quota,
+      used,
+      remaining: summary.remaining,
+      percentage: summary.percentage,
+      quotaStatus: summary.status,
+      quotaLabel: summary.label,
+    };
+  });
+}
+
+export type PatientAppointmentRow = {
+  id: string;
+  patientId: string;
+  patientName: string;
+  doctorId: string;
+  doctorName: string;
+  appointmentDate: string;
+  startTime: string;
+  endTime: string;
+  queueNumber: number | null;
+  status: AppointmentStatus;
+  chiefComplaint: string | null;
+  createdAt: Date;
+};
+
+/** Daftar janji temu milik pasien pada akun yang login (semua atau per pasien aktif). */
+export async function listAppointmentsForAccount(
+  accountUserId: string,
+  patientId?: string,
+): Promise<PatientAppointmentRow[]> {
+  const rows = await db.appointment.findMany({
+    where: {
+      patient: activePatientWhere({
+        accountUserId,
+        ...(patientId ? { id: patientId } : {}),
+      }),
+    },
+    include: {
+      patient: { select: { name: true } },
+      doctor: { select: { name: true } },
+    },
+    orderBy: [{ appointmentDate: "desc" }, { startTime: "desc" }, { createdAt: "desc" }],
+  });
+
+  return rows.map((r) => ({
+    id: r.id,
+    patientId: r.patientId,
+    patientName: r.patient.name,
+    doctorId: r.doctorId,
+    doctorName: r.doctor.name,
+    appointmentDate: toDateInput(r.appointmentDate),
+    startTime: r.startTime,
+    endTime: r.endTime,
+    queueNumber: r.queueNumber,
+    status: r.status,
+    chiefComplaint: r.chiefComplaint,
+    createdAt: r.createdAt,
   }));
 }
