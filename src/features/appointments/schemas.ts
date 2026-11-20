@@ -64,7 +64,8 @@ export type AppointmentStatusKey =
   | "IN_PROGRESS"
   | "COMPLETED"
   | "CANCELLED"
-  | "NO_SHOW";
+  | "NO_SHOW"
+  | "REJECTED";
 
 export const APPOINTMENT_STATUS_LABEL: Record<AppointmentStatusKey, string> = {
   PENDING: "Menunggu Persetujuan",
@@ -73,6 +74,7 @@ export const APPOINTMENT_STATUS_LABEL: Record<AppointmentStatusKey, string> = {
   COMPLETED: "Selesai",
   CANCELLED: "Dibatalkan",
   NO_SHOW: "Tidak Hadir",
+  REJECTED: "Ditolak",
 };
 
 export const APPOINTMENT_STATUS_VARIANT: Record<
@@ -85,7 +87,13 @@ export const APPOINTMENT_STATUS_VARIANT: Record<
   COMPLETED: "success",
   CANCELLED: "neutral",
   NO_SHOW: "danger",
+  REJECTED: "danger",
 };
+
+/** Format nomor antrean integer menjadi seperti "A-05". */
+export function formatQueueNumber(queueNumber: number, prefix = "A"): string {
+  return `${prefix}-${String(queueNumber).padStart(2, "0")}`;
+}
 
 export const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -102,4 +110,15 @@ export const bookAppointmentSchema = z.object({
 });
 
 export type BookAppointmentInput = z.infer<typeof bookAppointmentSchema>;
+
+export const rejectAppointmentSchema = z.object({
+  appointmentId: z.string().trim().min(1, "ID janji temu wajib diisi"),
+  reason: z
+    .string()
+    .trim()
+    .min(5, "Alasan penolakan minimal 5 karakter")
+    .max(500, "Alasan penolakan maksimal 500 karakter"),
+});
+
+export type RejectAppointmentInput = z.infer<typeof rejectAppointmentSchema>;
 

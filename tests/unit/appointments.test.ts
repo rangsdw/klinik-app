@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { bookAppointmentSchema, doctorScheduleSchema } from "@/features/appointments/schemas";
+import {
+  bookAppointmentSchema,
+  doctorScheduleSchema,
+  formatQueueNumber,
+  rejectAppointmentSchema,
+} from "@/features/appointments/schemas";
 import {
   assertValidScheduleSlot,
   getQuotaStatus,
@@ -151,5 +156,30 @@ describe("bookAppointmentSchema", () => {
         chiefComplaint: "ab",
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("formatQueueNumber & rejectAppointmentSchema", () => {
+  it("memformat nomor antrean menjadi format A-01, A-05, A-12", () => {
+    expect(formatQueueNumber(1)).toBe("A-01");
+    expect(formatQueueNumber(5)).toBe("A-05");
+    expect(formatQueueNumber(15)).toBe("A-15");
+    expect(formatQueueNumber(120)).toBe("A-120");
+  });
+
+  it("mewajibkan alasan penolakan minimal 5 karakter", () => {
+    expect(
+      rejectAppointmentSchema.safeParse({
+        appointmentId: "app-1",
+        reason: "Dok",
+      }).success,
+    ).toBe(false);
+
+    expect(
+      rejectAppointmentSchema.safeParse({
+        appointmentId: "app-1",
+        reason: "Dokter berhalangan hadir karena tugas luar",
+      }).success,
+    ).toBe(true);
   });
 });

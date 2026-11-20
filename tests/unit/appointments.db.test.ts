@@ -4,11 +4,14 @@ import { db } from "@/lib/db";
 import { dayOfWeekFromDateStr } from "@/lib/date";
 import { addFamilyMember, registerPatientAccount } from "@/features/patients/service";
 import {
+  approveAppointmentByStaff,
   bookAppointmentForPatient,
   cancelPatientAppointment,
   DuplicateAppointmentError,
+  InvalidAppointmentStateError,
   PatientNotOwnedError,
   QuotaFullError,
+  rejectAppointmentByStaff,
 } from "@/features/appointments/service";
 import { getAvailableSessionsForDate } from "@/features/appointments/queries";
 
@@ -251,5 +254,173 @@ describe("booking janji & kuota (database)", () => {
       today,
     );
     expect(appB.status).toBe("PENDING");
+  });
+
+  it("menerbitkan nomor antrean atomik unik per dokter per hari walau disetujui paralel", async () => {
+    const { doctor: doctor1, schedule: schedule1 } = await createDoctorAndSchedule(today, 10);
+    const { doctor: doctor2, schedule: schedule2 } = await createDoctorAndSchedule(today, 10);
+    const staffHash = await bcrypt.hash("rahasia123", 4);
+    const staff = await db.user.create({
+      data: {
+        name: "Staf Pendaftaran Uji",
+        email: "staf-uji-queue@contoh.test",
+        phone: "081600000001",
+        passwordHash: staffHash,
+        role: "STAFF",
+        staffType: "REGISTRATION",
+        isActive: true,
+      },
+    });
+
+    const accounts = await Promise.all([
+      newPatientAccount(),
+      newPatientAccount(),
+      newPatientAccount(),
+      newPatientAccount(),
+    ]);
+
+    const appsDoc1 = await Promise.all(
+      accounts.slice(0, 3).map((acc) =>
+        bookAppointmentForPatient(
+          acc.user.id,
+          {
+            patientId: acc.patient.id,
+            doctorId: doctor1.id,
+            scheduleId: schedule1.id,
+            appointmentDate: today,
+            chiefComplaint: "Keluhan antrean paralel",
+          },
+          today,
+        ),
+      ),
+    );
+    const appDoc2 = await bookAppointmentForPatient(
+      accounts[3]!.user.id,
+      {
+        patientId: accounts[3]!.patient.id,
+        doctorId: doctor2.id,
+        scheduleId: schedule2.id,
+        appointmentDate: today,
+        chiefComplaint: "Dokter berbeda",
+      },
+      today,
+    );
+
+    const approvedDoc1 = await Promise.all(
+      appsDoc1.map((app) => approveAppointmentByStaff(staff.id, app.id)),
+    );
+    const approvedDoc2 = await approveAppointmentByStaff(staff.id, appDoc2.id);
+
+    expect(approvedDoc1.map((r) => r.queueNumber).sort((a, b) => a - b)).toEqual([1, 2, 3]);
+    expect(approvedDoc2.queueNumber).toBe(1);
+    expect(approvedDoc2.formattedQueueNumber).toBe("A-01");
+  });
+
+  it("mencegah proses ulang paralel oleh dua staf dan mengembalikan kuota saat REJECTED", async () => {
+    const { doctor, schedule } = await createDoctorAndSchedule(today, 1);
+    const accA = await newPatientAccount();
+    const accB = await newPatientAccount();
+    const staffHash = await bcrypt.hash("rahasia123", 4);
+
+    const [staff1, staff2] = await Promise.all([
+      db.user.create({
+        data: {
+          name: "Staf Satu",
+          email: "staf-1-race@contoh.test",
+          phone: "081600000011",
+          passwordHash: staffHash,
+          role: "STAFF",
+          staffType: "REGISTRATION",
+          isActive: true,
+        },
+      }),
+      db.user.create({
+        data: {
+          name: "Staf Dua",
+          email: "staf-2-race@contoh.test",
+          phone: "081600000012",
+          passwordHash: staffHash,
+          role: "STAFF",
+          staffType: "REGISTRATION",
+          isActive: true,
+        },
+      }),
+    ]);
+
+    const pendingApp = await bookAppointmentForPatient(
+      accA.user.id,
+      {
+        patientId: accA.patient.id,
+        doctorId: doctor.id,
+        scheduleId: schedule.id,
+        appointmentDate: today,
+        chiefComplaint: "Cek balapan approve vs reject",
+      },
+      today,
+    );
+
+    // Dua staf memproses janji yang sama bersamaan -> tepat 1 berhasil, 1 ditolak
+    const race = await Promise.allSettled([
+      approveAppointmentByStaff(staff1.id, pendingApp.id),
+      rejectAppointmentByStaff(staff2.id, {
+        appointmentId: pendingApp.id,
+        reason: "Dokter berhalangan hadir mendadak",
+      }),
+    ]);
+    const okCount = race.filter((r) => r.status === "fulfilled").length;
+    const errList = race.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    expect(okCount).toBe(1);
+    expect(errList).toHaveLength(1);
+    expect(errList[0]?.reason).toBeInstanceOf(InvalidAppointmentStateError);
+
+    // Uji alur reject bersih pada janji baru untuk memastikan kuota kembali & riwayat tercatat
+    const { doctor: docReject, schedule: schReject } = await createDoctorAndSchedule(today, 1);
+    const appReject = await bookAppointmentForPatient(
+      accB.user.id,
+      {
+        patientId: accB.patient.id,
+        doctorId: docReject.id,
+        scheduleId: schReject.id,
+        appointmentDate: today,
+        chiefComplaint: "Akan ditolak staf",
+      },
+      today,
+    );
+
+    await rejectAppointmentByStaff(staff1.id, {
+      appointmentId: appReject.id,
+      reason: "Dokter sedang rapat dinas",
+    });
+
+    const row = await db.appointment.findUniqueOrThrow({ where: { id: appReject.id } });
+    expect(row.status).toBe("REJECTED");
+    expect(row.rejectionReason).toBe("Dokter sedang rapat dinas");
+    expect(row.queueNumber).toBeNull();
+
+    const histories = await db.appointmentHistory.findMany({
+      where: { appointmentId: appReject.id },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(histories).toHaveLength(2);
+    expect(histories[1]?.status).toBe("REJECTED");
+    expect(histories[1]?.changedByUserId).toBe(staff1.id);
+
+    // Kuota 1 kembali tersedia setelah REJECTED
+    const slots = await getAvailableSessionsForDate(docReject.id, today);
+    expect(slots[0]?.remaining).toBe(1);
+    expect(slots[0]?.quotaStatus).toBe("ALMOST_FULL");
+
+    const rebooked = await bookAppointmentForPatient(
+      accA.user.id,
+      {
+        patientId: accA.patient.id,
+        doctorId: docReject.id,
+        scheduleId: schReject.id,
+        appointmentDate: today,
+        chiefComplaint: "Booking ulang setelah slot kembali",
+      },
+      today,
+    );
+    expect(rebooked.status).toBe("PENDING");
   });
 });

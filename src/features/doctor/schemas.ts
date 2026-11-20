@@ -4,7 +4,7 @@ export const updateScheduleSchema = z.object({
   appointmentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Format tanggal harus YYYY-MM-DD"),
   startTime: z.string().regex(/^\d{2}:\d{2}$/, "Format jam harus HH:mm"),
   endTime: z.string().regex(/^\d{2}:\d{2}$/, "Format jam harus HH:mm"),
-  status: z.enum(["PENDING", "CONFIRMED", "IN_PROGRESS", "COMPLETED", "CANCELLED", "NO_SHOW"]),
+  status: z.enum(["PENDING", "CONFIRMED", "IN_PROGRESS", "COMPLETED", "CANCELLED", "NO_SHOW", "REJECTED"]),
 });
 
 export type UpdateScheduleInput = z.infer<typeof updateScheduleSchema>;

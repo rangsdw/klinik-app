@@ -1,17 +1,21 @@
 import "server-only";
+import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
   addDaysToDateStr,
   dayOfWeekFromDateStr,
   jakartaTodayStr,
   parseDateOnlyUtc,
+  toDateInput,
 } from "@/lib/date";
 import { getOwnedPatient } from "@/features/patients/queries";
 import {
   ACTIVE_QUOTA_STATUSES,
   DATE_REGEX,
+  formatQueueNumber,
   MAX_BOOKING_DAYS_AHEAD,
   type BookAppointmentInput,
+  type RejectAppointmentInput,
 } from "@/features/appointments/schemas";
 
 export type TimeSlot = {
@@ -297,4 +301,184 @@ export async function cancelPatientAppointment(accountUserId: string, appointmen
 
     return updated;
   });
+}
+
+type CounterTx = Pick<Prisma.TransactionClient, "$executeRaw" | "$queryRaw">;
+
+export function queueCounterKey(doctorId: string, dateStr: string): string {
+  return `queue-${doctorId}-${dateStr}`.slice(0, 64);
+}
+
+/** Nomor antrean harian dokter yang atomik lewat tabel counters (pola src/features/patients/mrn.ts). */
+export async function nextQueueNumber(
+  tx: CounterTx,
+  doctorId: string,
+  dateStr: string,
+): Promise<number> {
+  const key = queueCounterKey(doctorId, dateStr);
+  await tx.$executeRaw`INSERT INTO counters (\`key\`, value) VALUES (${key}, 1) ON DUPLICATE KEY UPDATE value = value + 1`;
+  const rows = await tx.$queryRaw<{ value: number }[]>`SELECT value FROM counters WHERE \`key\` = ${key}`;
+  const value = Number(rows[0]?.value);
+  if (!Number.isFinite(value) || value < 1) {
+    throw new Error("Gagal membuat nomor antrean.");
+  }
+  return value;
+}
+
+/** Titik sambung notifikasi status janji (belum mengirim email/WhatsApp). */
+export async function notifyAppointmentStatus(params: {
+  appointmentId: string;
+  patientName: string;
+  doctorName: string;
+  dateStr: string;
+  startTime: string;
+  status: "CONFIRMED" | "REJECTED";
+  queueNumber?: number;
+  reason?: string;
+}): Promise<void> {
+  // TODO(notifikasi): kirim email via sendMail (src/lib/mail.ts) atau WhatsApp saat kredensial tersedia.
+  void params;
+}
+
+/** Setujui janji PENDING dan terbitkan nomor antrean atomik per dokter per hari. */
+export async function approveAppointmentByStaff(staffUserId: string, appointmentId: string) {
+  const result = await db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM appointments WHERE id = ${appointmentId} FOR UPDATE`;
+
+    const appointment = await tx.appointment.findUnique({
+      where: { id: appointmentId },
+      include: {
+        patient: { select: { name: true } },
+        doctor: { select: { name: true } },
+      },
+    });
+
+    if (!appointment) {
+      throw new InvalidAppointmentStateError("Janji temu tidak ditemukan.");
+    }
+    if (appointment.status !== "PENDING") {
+      throw new InvalidAppointmentStateError(
+        "Janji temu sudah diproses dan tidak dapat disetujui ulang.",
+      );
+    }
+
+    const dateStr = toDateInput(appointment.appointmentDate);
+    const queueNumber = await nextQueueNumber(tx, appointment.doctorId, dateStr);
+
+    const updated = await tx.appointment.update({
+      where: { id: appointment.id },
+      data: {
+        status: "CONFIRMED",
+        queueNumber,
+        rejectionReason: null,
+      },
+    });
+
+    const formattedQueueNumber = formatQueueNumber(queueNumber);
+
+    await tx.appointmentHistory.create({
+      data: {
+        appointmentId: appointment.id,
+        status: "CONFIRMED",
+        notes: `Disetujui oleh staf pendaftaran. Nomor antrean: ${formattedQueueNumber}.`,
+        changedByUserId: staffUserId,
+      },
+    });
+
+    return {
+      id: updated.id,
+      queueNumber,
+      formattedQueueNumber,
+      patientName: appointment.patient.name,
+      doctorName: appointment.doctor.name,
+      dateStr,
+      startTime: appointment.startTime,
+    };
+  });
+
+  await notifyAppointmentStatus({
+    appointmentId: result.id,
+    patientName: result.patientName,
+    doctorName: result.doctorName,
+    dateStr: result.dateStr,
+    startTime: result.startTime,
+    status: "CONFIRMED",
+    queueNumber: result.queueNumber,
+  });
+
+  return {
+    id: result.id,
+    queueNumber: result.queueNumber,
+    formattedQueueNumber: result.formattedQueueNumber,
+  };
+}
+
+/** Tolak janji PENDING dengan alasan wajib dan kembalikan kuota sesi. */
+export async function rejectAppointmentByStaff(
+  staffUserId: string,
+  input: RejectAppointmentInput,
+) {
+  const reason = input.reason.trim();
+  if (reason.length < 5) {
+    throw new InvalidAppointmentStateError("Alasan penolakan minimal 5 karakter.");
+  }
+
+  const result = await db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM appointments WHERE id = ${input.appointmentId} FOR UPDATE`;
+
+    const appointment = await tx.appointment.findUnique({
+      where: { id: input.appointmentId },
+      include: {
+        patient: { select: { name: true } },
+        doctor: { select: { name: true } },
+      },
+    });
+
+    if (!appointment) {
+      throw new InvalidAppointmentStateError("Janji temu tidak ditemukan.");
+    }
+    if (appointment.status !== "PENDING") {
+      throw new InvalidAppointmentStateError(
+        "Janji temu sudah diproses dan tidak dapat ditolak.",
+      );
+    }
+
+    const updated = await tx.appointment.update({
+      where: { id: appointment.id },
+      data: {
+        status: "REJECTED",
+        rejectionReason: reason,
+        queueNumber: null,
+      },
+    });
+
+    await tx.appointmentHistory.create({
+      data: {
+        appointmentId: appointment.id,
+        status: "REJECTED",
+        notes: `Ditolak oleh staf pendaftaran: ${reason}`,
+        changedByUserId: staffUserId,
+      },
+    });
+
+    return {
+      updated,
+      patientName: appointment.patient.name,
+      doctorName: appointment.doctor.name,
+      dateStr: toDateInput(appointment.appointmentDate),
+      startTime: appointment.startTime,
+    };
+  });
+
+  await notifyAppointmentStatus({
+    appointmentId: result.updated.id,
+    patientName: result.patientName,
+    doctorName: result.doctorName,
+    dateStr: result.dateStr,
+    startTime: result.startTime,
+    status: "REJECTED",
+    reason,
+  });
+
+  return result.updated;
 }

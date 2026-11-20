@@ -32,6 +32,7 @@ import {
   DAY_DISPLAY_ORDER,
   DAY_LABEL,
   bookAppointmentSchema,
+  formatQueueNumber,
   type AppointmentStatusKey,
 } from "@/features/appointments/schemas";
 import type {
@@ -541,7 +542,9 @@ export function PatientBookingView({
                           {APPOINTMENT_STATUS_LABEL[statusKey]}
                         </StatusBadge>
                         {item.queueNumber !== null ? (
-                          <StatusBadge variant="neutral">Antrean #{item.queueNumber}</StatusBadge>
+                          <StatusBadge variant="neutral">
+                            Antrean {formatQueueNumber(item.queueNumber)}
+                          </StatusBadge>
                         ) : null}
                       </div>
 
@@ -562,6 +565,12 @@ export function PatientBookingView({
 
                       {item.chiefComplaint ? (
                         <p className="text-ink-muted text-sm">Keluhan: {item.chiefComplaint}</p>
+                      ) : null}
+
+                      {item.status === "REJECTED" && item.rejectionReason ? (
+                        <p className="border-danger/30 bg-danger-soft text-danger-ink rounded-lg border px-3 py-2 text-sm">
+                          Alasan penolakan: {item.rejectionReason}
+                        </p>
                       ) : null}
                     </div>
 

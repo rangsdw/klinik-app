@@ -1,7 +1,7 @@
 import "server-only";
 import type { AppointmentStatus } from "@prisma/client";
 import { db } from "@/lib/db";
-import { dayOfWeekFromDateStr, parseDateOnlyUtc, toDateInput } from "@/lib/date";
+import { dayOfWeekFromDateStr, jakartaTodayStr, parseDateOnlyUtc, toDateInput } from "@/lib/date";
 import { activePatientWhere } from "@/features/patients/queries";
 import { ACTIVE_QUOTA_STATUSES, DATE_REGEX } from "@/features/appointments/schemas";
 import { getQuotaStatus } from "@/features/appointments/service";
@@ -166,6 +166,7 @@ export type PatientAppointmentRow = {
   queueNumber: number | null;
   status: AppointmentStatus;
   chiefComplaint: string | null;
+  rejectionReason: string | null;
   createdAt: Date;
 };
 
@@ -200,6 +201,122 @@ export async function listAppointmentsForAccount(
     queueNumber: r.queueNumber,
     status: r.status,
     chiefComplaint: r.chiefComplaint,
+    rejectionReason: r.rejectionReason,
     createdAt: r.createdAt,
   }));
+}
+
+export type StaffAppointmentStats = {
+  pendingCount: number;
+  confirmedCount: number;
+  rejectedCount: number;
+  todayTotalCount: number;
+};
+
+export type StaffAppointmentRequestRow = {
+  id: string;
+  patientId: string;
+  patientName: string;
+  medicalRecordNumber: string;
+  doctorId: string;
+  doctorName: string;
+  scheduleId: string | null;
+  appointmentDate: string;
+  startTime: string;
+  endTime: string;
+  queueNumber: number | null;
+  status: AppointmentStatus;
+  chiefComplaint: string | null;
+  rejectionReason: string | null;
+  createdAt: Date;
+  sessionQuota: number | null;
+  sessionUsed: number;
+  sessionRemaining: number | null;
+  sessionPercentage: number;
+  sessionQuotaStatus: "AVAILABLE" | "ALMOST_FULL" | "FULL" | null;
+  sessionQuotaLabel: "Tersedia" | "Hampir Penuh" | "Penuh" | null;
+};
+
+/** Ambil daftar permintaan janji temu dan ringkasan statistik untuk staf pendaftaran. */
+export async function getStaffAppointmentRequestsData(
+  todayStr: string = jakartaTodayStr(),
+): Promise<{ stats: StaffAppointmentStats; requests: StaffAppointmentRequestRow[] }> {
+  const rows = await db.appointment.findMany({
+    where: {
+      patient: activePatientWhere(),
+    },
+    include: {
+      patient: { select: { name: true, medicalRecordNumber: true } },
+      doctor: { select: { name: true } },
+      schedule: { select: { id: true, quota: true, startTime: true, endTime: true } },
+    },
+    orderBy: [{ appointmentDate: "asc" }, { startTime: "asc" }, { createdAt: "asc" }],
+  });
+
+  const quotaSet = new Set<string>(ACTIVE_QUOTA_STATUSES);
+  const usageMap = new Map<string, number>();
+
+  let pendingCount = 0;
+  let confirmedCount = 0;
+  let rejectedCount = 0;
+  let todayTotalCount = 0;
+
+  for (const r of rows) {
+    const dateStr = toDateInput(r.appointmentDate);
+    if (r.status === "PENDING") pendingCount += 1;
+    if (r.status === "CONFIRMED") confirmedCount += 1;
+    if (r.status === "REJECTED") rejectedCount += 1;
+    if (dateStr === todayStr) todayTotalCount += 1;
+
+    if (quotaSet.has(r.status)) {
+      const slotKey = r.scheduleId
+        ? `${r.doctorId}|${dateStr}|id:${r.scheduleId}`
+        : `${r.doctorId}|${dateStr}|time:${r.startTime}-${r.endTime}`;
+      usageMap.set(slotKey, (usageMap.get(slotKey) ?? 0) + 1);
+    }
+  }
+
+  const requests: StaffAppointmentRequestRow[] = rows.map((r) => {
+    const dateStr = toDateInput(r.appointmentDate);
+    const idKey = r.scheduleId ? `${r.doctorId}|${dateStr}|id:${r.scheduleId}` : null;
+    const timeKey = `${r.doctorId}|${dateStr}|time:${r.startTime}-${r.endTime}`;
+    const sessionUsed = (idKey ? (usageMap.get(idKey) ?? 0) : 0) + (usageMap.get(timeKey) ?? 0);
+
+    const quota = r.schedule?.quota ?? null;
+    const summary = quota !== null ? getQuotaStatus(sessionUsed, quota) : null;
+
+    return {
+      id: r.id,
+      patientId: r.patientId,
+      patientName: r.patient.name,
+      medicalRecordNumber: r.patient.medicalRecordNumber,
+      doctorId: r.doctorId,
+      doctorName: r.doctor.name,
+      scheduleId: r.scheduleId,
+      appointmentDate: dateStr,
+      startTime: r.startTime,
+      endTime: r.endTime,
+      queueNumber: r.queueNumber,
+      status: r.status,
+      chiefComplaint: r.chiefComplaint,
+      rejectionReason: r.rejectionReason,
+      createdAt: r.createdAt,
+      sessionQuota: quota,
+      sessionUsed,
+      sessionRemaining: summary?.remaining ?? null,
+      sessionPercentage: summary?.percentage ?? 0,
+      sessionQuotaStatus: summary?.status ?? null,
+      sessionQuotaLabel: summary?.label ?? null,
+    };
+  });
+
+  return {
+    stats: {
+      pendingCount,
+      confirmedCount,
+      rejectedCount,
+      todayTotalCount,
+    },
+    requests,
+  };
 }

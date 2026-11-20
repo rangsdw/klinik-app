@@ -8,14 +8,17 @@ import { firstErrors, type ActionResult } from "@/lib/action-result";
 import {
   bookAppointmentSchema,
   doctorScheduleSchema,
+  rejectAppointmentSchema,
   type BookAppointmentInput,
   type DoctorScheduleInput,
+  type RejectAppointmentInput,
 } from "@/features/appointments/schemas";
 import {
   getAvailableSessionsForDate,
   type AvailableSessionSlot,
 } from "@/features/appointments/queries";
 import {
+  approveAppointmentByStaff,
   assertValidScheduleSlot,
   bookAppointmentForPatient,
   cancelPatientAppointment,
@@ -24,6 +27,7 @@ import {
   InvalidBookingDateError,
   PatientNotOwnedError,
   QuotaFullError,
+  rejectAppointmentByStaff,
   ScheduleOverlapError,
   validateBookingDate,
 } from "@/features/appointments/service";
@@ -282,6 +286,55 @@ export async function cancelAppointmentAction(appointmentId: string): Promise<Ac
     if (error instanceof PatientNotOwnedError) {
       notFound();
     }
+    if (error instanceof InvalidAppointmentStateError) {
+      return { ok: false, message: error.message };
+    }
+    throw error;
+  }
+}
+
+export async function approveAppointmentAction(
+  appointmentId: string,
+): Promise<ActionResult<{ queueNumber: number; formattedQueueNumber: string }>> {
+  const staff = await requireStaffType("REGISTRATION");
+
+  try {
+    const res = await approveAppointmentByStaff(staff.id, appointmentId);
+    revalidateAppointmentPages();
+    return {
+      ok: true,
+      message: `Janji disetujui. Nomor antrean: ${res.formattedQueueNumber}.`,
+      data: {
+        queueNumber: res.queueNumber,
+        formattedQueueNumber: res.formattedQueueNumber,
+      },
+    };
+  } catch (error) {
+    if (error instanceof InvalidAppointmentStateError) {
+      return { ok: false, message: error.message };
+    }
+    throw error;
+  }
+}
+
+export async function rejectAppointmentAction(
+  input: RejectAppointmentInput,
+): Promise<ActionResult> {
+  const staff = await requireStaffType("REGISTRATION");
+
+  const parsed = rejectAppointmentSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, fieldErrors: firstErrors(parsed.error.flatten().fieldErrors) };
+  }
+
+  try {
+    await rejectAppointmentByStaff(staff.id, parsed.data);
+    revalidateAppointmentPages();
+    return {
+      ok: true,
+      message: "Janji temu ditolak dan kuota sesi telah dikembalikan.",
+    };
+  } catch (error) {
     if (error instanceof InvalidAppointmentStateError) {
       return { ok: false, message: error.message };
     }

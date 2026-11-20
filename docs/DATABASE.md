@@ -106,8 +106,9 @@ Menyimpan jadwal dan sesi pemeriksaan antara pasien dengan dokter.
 | appointment_date | date | Tanggal janji temu |
 | start_time, end_time | varchar(5) | Format "HH:mm" (misal "09:00") |
 | queue_number | int | nullable (`NULL` saat `PENDING`, diisi saat disetujui pada Langkah 3) |
-| status | enum AppointmentStatus | PENDING, CONFIRMED, IN_PROGRESS, COMPLETED, CANCELLED, NO_SHOW |
+| status | enum AppointmentStatus | PENDING, CONFIRMED, IN_PROGRESS, COMPLETED, CANCELLED, NO_SHOW, REJECTED |
 | chief_complaint | text | Keluhan utama / alasan berobat pasien |
+| rejection_reason | text | nullable; alasan penolakan janji oleh staf pendaftaran |
 | created_at, updated_at | datetime | |
 
 ### `appointment_histories` (AppointmentHistory)
