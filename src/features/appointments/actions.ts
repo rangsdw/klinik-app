@@ -7,6 +7,7 @@ import { requireRole, requireStaffType } from "@/lib/rbac";
 import { firstErrors, type ActionResult } from "@/lib/action-result";
 import { checkInScanLimiter } from "@/lib/rate-limit";
 import { parsePatientQr, QR_PREFIX } from "@/features/patients/qr";
+import { renderPatientQrSvg } from "@/features/patients/qr-render";
 import {
   findPatientByQrTokenForStaff,
   searchPatientsForStaff,
@@ -19,11 +20,13 @@ import {
   performCheckInSchema,
   rejectAppointmentSchema,
   rescheduleAppointmentSchema,
+  walkInRegistrationSchema,
   type BookAppointmentInput,
   type DoctorScheduleInput,
   type PerformCheckInInput,
   type RejectAppointmentInput,
   type RescheduleAppointmentInput,
+  type WalkInRegistrationInput,
 } from "@/features/appointments/schemas";
 import {
   getAvailableSessionsForDate,
@@ -35,17 +38,20 @@ import {
   bookAppointmentForPatient,
   cancelPatientAppointment,
   DuplicateAppointmentError,
+  DuplicatePatientError,
   InvalidAppointmentStateError,
   InvalidBookingDateError,
   lookupPatientCheckInToday,
   PatientNotOwnedError,
   performAppointmentCheckIn,
   QuotaFullError,
+  registerWalkInAppointment,
   rejectAppointmentByStaff,
   rescheduleAppointmentByStaff,
   ScheduleOverlapError,
   validateBookingDate,
   type CheckInLookupResult,
+  type WalkInRegistrationResult,
 } from "@/features/appointments/service";
 
 async function ensureActiveDoctor(doctorId: string): Promise<boolean> {
@@ -520,6 +526,83 @@ export async function performCheckInAction(input: PerformCheckInInput): Promise<
     };
   } catch (error) {
     if (error instanceof InvalidAppointmentStateError) {
+      return { ok: false, message: error.message };
+    }
+    throw error;
+  }
+}
+
+export async function searchWalkInPatientsAction(
+  query: string,
+): Promise<ActionResult<StaffPatientSummary[]>> {
+  await requireStaffType("REGISTRATION");
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return { ok: true, data: [] };
+  }
+  const results = await searchPatientsForStaff(trimmed, 10);
+  return { ok: true, data: results };
+}
+
+export type WalkInActionSuccess = Omit<WalkInRegistrationResult, "newPatientQrToken"> & {
+  newPatientQrSvg: string | null;
+};
+
+export type WalkInActionResult =
+  | { ok: true; message?: string; data: WalkInActionSuccess }
+  | {
+      ok: false;
+      message?: string;
+      fieldErrors?: Record<string, string>;
+      duplicatePatient?: StaffPatientSummary;
+    };
+
+export async function registerWalkInAction(
+  input: WalkInRegistrationInput,
+): Promise<WalkInActionResult> {
+  const staff = await requireStaffType("REGISTRATION");
+
+  const parsed = walkInRegistrationSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, fieldErrors: firstErrors(parsed.error.flatten().fieldErrors) };
+  }
+
+  try {
+    const res = await registerWalkInAppointment(staff.id, parsed.data);
+    const newPatientQrSvg =
+      res.isNewPatient && res.newPatientQrToken
+        ? await renderPatientQrSvg(res.newPatientQrToken)
+        : null;
+
+    revalidateAppointmentPages();
+    revalidatePath("/staf/pendaftaran/walk-in");
+    revalidatePath("/staf/pendaftaran/check-in");
+    revalidatePath("/pasien/antrean");
+
+    const { newPatientQrToken: _ignored, ...safeData } = res;
+    void _ignored;
+
+    return {
+      ok: true,
+      message: `Walk-in berhasil didaftarkan. Nomor antrean: ${res.formattedQueueNumber}.`,
+      data: {
+        ...safeData,
+        newPatientQrSvg,
+      },
+    };
+  } catch (error) {
+    if (error instanceof DuplicatePatientError) {
+      return {
+        ok: false,
+        message: error.message,
+        duplicatePatient: error.existingPatient,
+      };
+    }
+    if (
+      error instanceof DuplicateAppointmentError ||
+      error instanceof InvalidBookingDateError ||
+      error instanceof InvalidAppointmentStateError
+    ) {
       return { ok: false, message: error.message };
     }
     throw error;

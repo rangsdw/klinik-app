@@ -3,12 +3,17 @@ import { db } from "@/lib/db";
 import { formatMedicalRecordNumber, generateMedicalRecordNumber } from "@/features/patients/mrn";
 import {
   addFamilyMember,
+  createPatient,
   FamilyLimitError,
   PatientNotOwnedError,
   regeneratePatientQrToken,
   registerPatientAccount,
 } from "@/features/patients/service";
-import { getOwnedPatient, listPatientsForAccount } from "@/features/patients/queries";
+import {
+  countPatientsForAccount,
+  getOwnedPatient,
+  listPatientsForAccount,
+} from "@/features/patients/queries";
 import { MAX_FAMILY_MEMBERS } from "@/config/clinic";
 
 /** Integrasi ke database test terpisah (klinik_app_test), dibersihkan tiap test. */
@@ -170,5 +175,25 @@ describe("QR Code pasien", () => {
     await expect(regeneratePatientQrToken(akunA.user.id, child.id)).rejects.toBeInstanceOf(
       PatientNotOwnedError,
     );
+  });
+
+  it("regresi: pasien walk-in (accountUserId null) tidak muncul di portal maupun hitungan akun", async () => {
+    const akun = await newAccount();
+    const walkInPatient = await db.$transaction((tx) =>
+      createPatient(tx, {
+        accountUserId: null,
+        name: "Pasien Walkin Tanpa Akun",
+        birthDate: new Date("1994-01-10T00:00:00.000Z"),
+        gender: "MALE",
+        relationship: "OTHER",
+        isSelf: false,
+      }),
+    );
+
+    expect(await listPatientsForAccount(akun.user.id)).toHaveLength(1);
+    expect(await countPatientsForAccount(akun.user.id)).toBe(1);
+    expect(await getOwnedPatient(akun.user.id, walkInPatient.id)).toBeNull();
+    expect(await listPatientsForAccount("")).toEqual([]);
+    expect(await getOwnedPatient("", walkInPatient.id)).toBeNull();
   });
 });

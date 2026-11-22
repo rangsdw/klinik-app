@@ -3,12 +3,15 @@ import type { AppointmentStatus, Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
   addDaysToDateStr,
+  ageLabel,
   dayOfWeekFromDateStr,
+  jakartaCurrentTimeStr,
   jakartaTodayStr,
   parseDateOnlyUtc,
   toDateInput,
 } from "@/lib/date";
-import { getOwnedPatient } from "@/features/patients/queries";
+import { activePatientWhere, getOwnedPatient } from "@/features/patients/queries";
+import { createPatient, normalizeMemberInput } from "@/features/patients/service";
 import {
   findPatientByIdForStaff,
   type StaffPatientSummary,
@@ -22,6 +25,7 @@ import {
   type PerformCheckInInput,
   type RejectAppointmentInput,
   type RescheduleAppointmentInput,
+  type WalkInRegistrationInput,
 } from "@/features/appointments/schemas";
 
 export type TimeSlot = {
@@ -69,6 +73,16 @@ export class InvalidAppointmentStateError extends Error {
   constructor(message = "Status janji tidak dapat diubah.") {
     super(message);
     this.name = "InvalidAppointmentStateError";
+  }
+}
+
+export class DuplicatePatientError extends Error {
+  readonly existingPatient: StaffPatientSummary;
+
+  constructor(existingPatient: StaffPatientSummary) {
+    super(`Pasien sudah terdaftar dengan nama ${existingPatient.name} (${existingPatient.medicalRecordNumber}).`);
+    this.name = "DuplicatePatientError";
+    this.existingPatient = existingPatient;
   }
 }
 
@@ -228,6 +242,7 @@ export async function bookAppointmentForPatient(
       where: {
         doctorId: schedule.doctorId,
         appointmentDate: targetDate,
+        source: "ONLINE",
         status: { in: [...ACTIVE_QUOTA_STATUSES] },
         OR: [
           { scheduleId: schedule.id },
@@ -581,6 +596,7 @@ export async function rescheduleAppointmentByStaff(
         id: { not: appointment.id },
         doctorId: targetSchedule.doctorId,
         appointmentDate: targetDate,
+        source: "ONLINE",
         status: { in: [...ACTIVE_QUOTA_STATUSES] },
         OR: [
           { scheduleId: targetSchedule.id },
@@ -593,7 +609,7 @@ export async function rescheduleAppointmentByStaff(
       },
     });
 
-    if (usedCount >= targetSchedule.quota) {
+    if (appointment.source === "ONLINE" && usedCount >= targetSchedule.quota) {
       throw new QuotaFullError("Kuota sesi tujuan sudah penuh.");
     }
 
@@ -823,6 +839,191 @@ export async function performAppointmentCheckIn(
       queueNumber: appointment.queueNumber,
       formattedQueueNumber:
         appointment.queueNumber !== null ? formatQueueNumber(appointment.queueNumber) : null,
+    };
+  });
+}
+
+export type WalkInRegistrationResult = {
+  appointmentId: string;
+  patientId: string;
+  patientName: string;
+  medicalRecordNumber: string;
+  doctorName: string;
+  appointmentDate: string;
+  startTime: string;
+  endTime: string;
+  queueNumber: number;
+  formattedQueueNumber: string;
+  isNewPatient: boolean;
+  newPatientQrToken: string | null;
+};
+
+/**
+ * Daftarkan pasien walk-in (pasien lama atau pasien baru tanpa akun portal) dalam satu transaksi.
+ * Walk-in tidak mengurangi kuota booking online dan langsung mendapatkan status CONFIRMED + checkedInAt.
+ */
+export async function registerWalkInAppointment(
+  staffUserId: string,
+  input: WalkInRegistrationInput,
+  todayStr: string = jakartaTodayStr(),
+  currentTimeStr: string = jakartaCurrentTimeStr(),
+): Promise<WalkInRegistrationResult> {
+  const targetDate = parseDateOnlyUtc(todayStr);
+  const expectedDay = dayOfWeekFromDateStr(todayStr);
+
+  return db.$transaction(async (tx) => {
+    const schedule = await tx.doctorSchedule.findUnique({
+      where: { id: input.scheduleId },
+      include: {
+        doctor: { select: { id: true, name: true, role: true, isActive: true } },
+      },
+    });
+
+    if (
+      !schedule ||
+      !schedule.isActive ||
+      schedule.doctorId !== input.doctorId ||
+      schedule.doctor.role !== "DOCTOR" ||
+      !schedule.doctor.isActive ||
+      schedule.dayOfWeek !== expectedDay
+    ) {
+      throw new InvalidBookingDateError("Sesi praktik tidak aktif atau bukan untuk jadwal hari ini.");
+    }
+
+    if (timeToMinutes(currentTimeStr) > timeToMinutes(schedule.endTime)) {
+      throw new InvalidBookingDateError("Sesi praktik dokter ini sudah berakhir untuk hari ini.");
+    }
+
+    let patientId: string;
+    let patientName: string;
+    let medicalRecordNumber: string;
+    let isNewPatient = false;
+    let newPatientQrToken: string | null = null;
+
+    if (input.mode === "EXISTING") {
+      const existing = await tx.patient.findFirst({
+        where: activePatientWhere({ id: input.patientId }),
+        select: { id: true, name: true, medicalRecordNumber: true },
+      });
+      if (!existing) {
+        throw new InvalidAppointmentStateError("Pasien tidak ditemukan.");
+      }
+      patientId = existing.id;
+      patientName = existing.name;
+      medicalRecordNumber = existing.medicalRecordNumber;
+    } else {
+      const normalized = normalizeMemberInput({
+        ...input.newPatient,
+        relationship: "OTHER",
+      });
+
+      if (normalized.nik) {
+        const byNik = await tx.patient.findFirst({
+          where: activePatientWhere({ nik: normalized.nik }),
+          select: { id: true, name: true, medicalRecordNumber: true, birthDate: true },
+        });
+        if (byNik) {
+          throw new DuplicatePatientError({
+            id: byNik.id,
+            name: byNik.name,
+            medicalRecordNumber: byNik.medicalRecordNumber,
+            ageLabel: ageLabel(byNik.birthDate),
+          });
+        }
+      }
+
+      if (normalized.phone) {
+        const byIdentity = await tx.patient.findFirst({
+          where: activePatientWhere({
+            name: normalized.name,
+            birthDate: normalized.birthDate,
+            phone: normalized.phone,
+          }),
+          select: { id: true, name: true, medicalRecordNumber: true, birthDate: true },
+        });
+        if (byIdentity) {
+          throw new DuplicatePatientError({
+            id: byIdentity.id,
+            name: byIdentity.name,
+            medicalRecordNumber: byIdentity.medicalRecordNumber,
+            ageLabel: ageLabel(byIdentity.birthDate),
+          });
+        }
+      }
+
+      const createdPatient = await createPatient(tx, {
+        ...normalized,
+        accountUserId: null,
+        createdByUserId: staffUserId,
+        isSelf: false,
+      });
+
+      patientId = createdPatient.id;
+      patientName = createdPatient.name;
+      medicalRecordNumber = createdPatient.medicalRecordNumber;
+      isNewPatient = true;
+      newPatientQrToken = createdPatient.qrToken;
+    }
+
+    const duplicateAppointment = await tx.appointment.findFirst({
+      where: {
+        patientId,
+        doctorId: schedule.doctorId,
+        appointmentDate: targetDate,
+        status: { in: ["PENDING", "CONFIRMED", "IN_PROGRESS"] },
+      },
+      select: { id: true },
+    });
+
+    if (duplicateAppointment) {
+      throw new DuplicateAppointmentError(
+        "Pasien sudah memiliki janji aktif hari ini pada dokter tersebut. Arahkan ke halaman Check-in.",
+      );
+    }
+
+    const now = new Date();
+    const queueNumber = await nextQueueNumber(tx, schedule.doctorId, todayStr);
+    const formattedQueueNumber = formatQueueNumber(queueNumber);
+
+    const createdAppointment = await tx.appointment.create({
+      data: {
+        patientId,
+        doctorId: schedule.doctorId,
+        scheduleId: schedule.id,
+        source: "WALK_IN",
+        appointmentDate: targetDate,
+        startTime: schedule.startTime,
+        endTime: schedule.endTime,
+        queueNumber,
+        status: "CONFIRMED",
+        checkedInAt: now,
+        checkedInByUserId: staffUserId,
+        chiefComplaint: input.chiefComplaint.trim(),
+      },
+    });
+
+    await tx.appointmentHistory.create({
+      data: {
+        appointmentId: createdAppointment.id,
+        status: "CONFIRMED",
+        notes: `Pendaftaran walk-in oleh staf pendaftaran. Nomor antrean: ${formattedQueueNumber}.`,
+        changedByUserId: staffUserId,
+      },
+    });
+
+    return {
+      appointmentId: createdAppointment.id,
+      patientId,
+      patientName,
+      medicalRecordNumber,
+      doctorName: schedule.doctor.name,
+      appointmentDate: todayStr,
+      startTime: schedule.startTime,
+      endTime: schedule.endTime,
+      queueNumber,
+      formattedQueueNumber,
+      isNewPatient,
+      newPatientQrToken,
     };
   });
 }

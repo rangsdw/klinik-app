@@ -221,4 +221,21 @@
     padding: 2rem;
     background: var(--color-qr-surface);
   }
+  body.printing-queue-ticket * {
+    visibility: hidden;
+  }
+  body.printing-queue-ticket .ticket-print-only,
+  body.printing-queue-ticket .ticket-print-only * {
+    visibility: visible;
+  }
+  body.printing-queue-ticket .ticket-print-only {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex !important;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 2rem;
+    background: var(--color-qr-surface);
+  }
 }

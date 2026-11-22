@@ -22,7 +22,8 @@ export const BCRYPT_COST = 12;
 export { formatMedicalRecordNumber, generateMedicalRecordNumber } from "@/features/patients/mrn";
 
 export type CreatePatientData = {
-  accountUserId: string;
+  accountUserId?: string | null;
+  createdByUserId?: string | null;
   name: string;
   birthDate: Date;
   gender: Gender;
@@ -42,11 +43,13 @@ export async function createPatient(tx: Tx, data: CreatePatientData) {
   return tx.patient.create({
     data: {
       ...data,
+      accountUserId: data.accountUserId ?? null,
+      createdByUserId: data.createdByUserId ?? null,
       isSelf: data.isSelf ?? false,
       medicalRecordNumber,
       qrToken: randomUUID(),
     },
-    select: { id: true, medicalRecordNumber: true, name: true },
+    select: { id: true, medicalRecordNumber: true, name: true, qrToken: true },
   });
 }
 

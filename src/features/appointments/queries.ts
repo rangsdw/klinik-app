@@ -1,10 +1,16 @@
 import "server-only";
 import type { AppointmentStatus } from "@prisma/client";
 import { db } from "@/lib/db";
-import { dayOfWeekFromDateStr, jakartaTodayStr, parseDateOnlyUtc, toDateInput } from "@/lib/date";
+import {
+  dayOfWeekFromDateStr,
+  jakartaCurrentTimeStr,
+  jakartaTodayStr,
+  parseDateOnlyUtc,
+  toDateInput,
+} from "@/lib/date";
 import { activePatientWhere } from "@/features/patients/queries";
 import { ACTIVE_QUOTA_STATUSES, DATE_REGEX, formatQueueNumber } from "@/features/appointments/schemas";
-import { getQuotaStatus } from "@/features/appointments/service";
+import { getQuotaStatus, timeToMinutes } from "@/features/appointments/service";
 
 export type DoctorOption = {
   id: string;
@@ -124,6 +130,7 @@ export async function getAvailableSessionsForDate(
       where: {
         doctorId,
         appointmentDate: targetDate,
+        source: "ONLINE",
         status: { in: [...ACTIVE_QUOTA_STATUSES] },
       },
       select: { id: true, scheduleId: true, startTime: true, endTime: true },
@@ -274,7 +281,7 @@ export async function getStaffAppointmentRequestsData(
     if (r.status === "REJECTED") rejectedCount += 1;
     if (dateStr === todayStr) todayTotalCount += 1;
 
-    if (quotaSet.has(r.status)) {
+    if (r.source === "ONLINE" && quotaSet.has(r.status)) {
       const slotKey = r.scheduleId
         ? `${r.doctorId}|${dateStr}|id:${r.scheduleId}`
         : `${r.doctorId}|${dateStr}|time:${r.startTime}-${r.endTime}`;
@@ -399,4 +406,64 @@ export async function getCheckInDashboardData(
       checkedInAt: r.checkedInAt!,
     })),
   };
+}
+
+export type TodayWalkInSessionOption = {
+  scheduleId: string;
+  doctorId: string;
+  doctorName: string;
+  startTime: string;
+  endTime: string;
+  currentQueueCount: number;
+  walkInCount: number;
+  isEnded: boolean;
+};
+
+/** Daftar sesi praktik dokter yang aktif hari ini beserta jumlah antrean untuk pendaftaran walk-in. */
+export async function getTodayWalkInSessions(
+  todayStr: string = jakartaTodayStr(),
+  currentTimeStr: string = jakartaCurrentTimeStr(),
+): Promise<TodayWalkInSessionOption[]> {
+  const dayOfWeek = dayOfWeekFromDateStr(todayStr);
+  const todayDate = parseDateOnlyUtc(todayStr);
+
+  const [schedules, todayAppointments] = await Promise.all([
+    db.doctorSchedule.findMany({
+      where: {
+        dayOfWeek,
+        isActive: true,
+        doctor: { role: "DOCTOR", isActive: true },
+      },
+      include: { doctor: { select: { name: true } } },
+      orderBy: [{ startTime: "asc" }, { doctor: { name: "asc" } }],
+    }),
+    db.appointment.findMany({
+      where: {
+        appointmentDate: todayDate,
+        status: { in: ["CONFIRMED", "IN_PROGRESS", "COMPLETED"] },
+      },
+      select: { doctorId: true, scheduleId: true, startTime: true, endTime: true, source: true },
+    }),
+  ]);
+
+  const nowMinutes = timeToMinutes(currentTimeStr);
+
+  return schedules.map((s) => {
+    const matching = todayAppointments.filter(
+      (a) =>
+        a.doctorId === s.doctorId &&
+        (a.scheduleId === s.id ||
+          (a.scheduleId === null && a.startTime === s.startTime && a.endTime === s.endTime)),
+    );
+    return {
+      scheduleId: s.id,
+      doctorId: s.doctorId,
+      doctorName: s.doctor.name,
+      startTime: s.startTime,
+      endTime: s.endTime,
+      currentQueueCount: matching.length,
+      walkInCount: matching.filter((a) => a.source === "WALK_IN").length,
+      isEnded: nowMinutes > timeToMinutes(s.endTime),
+    };
+  });
 }

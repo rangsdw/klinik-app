@@ -49,6 +49,9 @@ export const familyMemberSchema = z.object({
 });
 export type FamilyMemberInput = z.infer<typeof familyMemberSchema>;
 
+export const walkInNewPatientSchema = familyMemberSchema.omit({ relationship: true });
+export type WalkInNewPatientInput = z.infer<typeof walkInNewPatientSchema>;
+
 export const profileSchema = z.object({
   name: z.string().trim().min(3, "Nama minimal 3 karakter").max(120, "Nama terlalu panjang"),
   email: z.string().trim().min(1, "Email wajib diisi").email("Format email tidak valid"),

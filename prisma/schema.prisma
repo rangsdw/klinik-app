@@ -108,7 +108,8 @@ model Counter {
 
 model Patient {
   id                  String       @id @default(cuid())
-  accountUserId       String       @map("account_user_id")
+  accountUserId       String?      @map("account_user_id")
+  createdByUserId     String?      @map("created_by_user_id")
   /// Format RM-YYYY-000001, digenerate di features/patients/service.ts
   medicalRecordNumber String       @unique @map("medical_record_number") @db.VarChar(20)
   nik                 String?      @unique @db.Char(16)
@@ -128,7 +129,7 @@ model Patient {
   createdAt           DateTime     @default(now()) @map("created_at")
   updatedAt           DateTime     @updatedAt @map("updated_at")
 
-  account User @relation(fields: [accountUserId], references: [id], onDelete: Cascade)
+  account User? @relation(fields: [accountUserId], references: [id], onDelete: Cascade)
   appointments   Appointment[]
   medicalRecords MedicalRecord[]
 
@@ -171,11 +172,17 @@ enum AppointmentStatus {
   REJECTED
 }
 
+enum AppointmentSource {
+  ONLINE
+  WALK_IN
+}
+
 model Appointment {
   id              String            @id @default(cuid())
   patientId       String            @map("patient_id")
   doctorId        String            @map("doctor_id")
   scheduleId      String?           @map("schedule_id")
+  source          AppointmentSource @default(ONLINE)
   appointmentDate DateTime          @map("appointment_date") @db.Date
   startTime       String            @map("start_time") @db.VarChar(5)
   endTime         String            @map("end_time") @db.VarChar(5)

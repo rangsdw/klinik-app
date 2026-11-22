@@ -13,6 +13,7 @@ Perbarui dokumen ini setiap kali modul menambah atau mengubah tabel.
 | `Gender`       | MALE, FEMALE                                |
 | `Relationship` | SELF, SPOUSE, CHILD, PARENT, SIBLING, OTHER |
 | `BloodType`    | A, B, AB, O                                 |
+| `AppointmentSource` | ONLINE, WALK_IN                        |
 
 ## Tabel (Tahap 1 & 2, Rangga)
 
@@ -40,7 +41,8 @@ Satu baris = satu orang pasien dengan rekam medis dan QR sendiri. Satu akun (Use
 | Kolom                  | Tipe              | Catatan                                                                                      |
 | ---------------------- | ----------------- | -------------------------------------------------------------------------------------------- |
 | id                     | varchar (cuid)    | PK                                                                                           |
-| account_user_id        | varchar           | FK ke `users.id` (cascade), index                                                            |
+| account_user_id        | varchar           | nullable (null untuk pasien walk-in tanpa akun portal); FK ke `users.id` (cascade), index    |
+| created_by_user_id     | varchar           | nullable; ID staf pendaftaran bila didaftarkan via walk-in                                   |
 | medical_record_number  | varchar(20)       | unik, format `RM-YYYY-000001`                                                                |
 | nik                    | char(16)          | unik bila diisi, nullable                                                                    |
 | name                   | varchar(120)      | index, Title Case                                                                            |
@@ -103,6 +105,7 @@ Menyimpan jadwal dan sesi pemeriksaan antara pasien dengan dokter.
 | patient_id | varchar | FK ke `patients.id` (cascade), index |
 | doctor_id | varchar | FK ke `users.id` (dokter) |
 | schedule_id | varchar | nullable; FK ke `doctor_schedules.id` (`onDelete: SetNull`), index `(schedule_id, appointment_date)` |
+| source | enum AppointmentSource | ONLINE, WALK_IN (default ONLINE; walk-in tidak mengurangi kuota online) |
 | appointment_date | date | Tanggal janji temu |
 | start_time, end_time | varchar(5) | Format "HH:mm" (misal "09:00") |
 | queue_number | int | nullable (`NULL` saat `PENDING`, diisi saat disetujui pada Langkah 3) |

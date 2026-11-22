@@ -35,6 +35,7 @@ export type PatientView = Prisma.PatientGetPayload<{ select: typeof patientSelec
 
 /** Semua pasien milik akun (diri sendiri dulu, lalu urut nama). */
 export async function listPatientsForAccount(accountUserId: string): Promise<PatientView[]> {
+  if (!accountUserId) return [];
   return db.patient.findMany({
     where: activePatientWhere({ accountUserId }),
     select: patientSelect,
@@ -43,6 +44,7 @@ export async function listPatientsForAccount(accountUserId: string): Promise<Pat
 }
 
 export async function countPatientsForAccount(accountUserId: string): Promise<number> {
+  if (!accountUserId) return 0;
   return db.patient.count({ where: activePatientWhere({ accountUserId }) });
 }
 
@@ -54,7 +56,7 @@ export async function getOwnedPatient(
   accountUserId: string,
   patientId: string,
 ): Promise<PatientView | null> {
-  if (!patientId) return null;
+  if (!accountUserId || !patientId) return null;
   return db.patient.findFirst({
     where: activePatientWhere({ id: patientId, accountUserId }),
     select: patientSelect,
@@ -62,6 +64,7 @@ export async function getOwnedPatient(
 }
 
 export async function getSelfPatient(accountUserId: string): Promise<PatientView | null> {
+  if (!accountUserId) return null;
   return db.patient.findFirst({
     where: activePatientWhere({ accountUserId, isSelf: true }),
     select: patientSelect,
@@ -73,6 +76,7 @@ export async function getSelfPatient(accountUserId: string): Promise<PatientView
  * Fallback ke pasien isSelf (lalu pasien pertama) bila cookie kosong/tidak valid.
  */
 export async function getActivePatient(accountUserId: string): Promise<PatientView | null> {
+  if (!accountUserId) return null;
   const store = await cookies();
   const fromCookie = store.get(ACTIVE_PATIENT_COOKIE)?.value;
   if (fromCookie) {

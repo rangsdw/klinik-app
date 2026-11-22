@@ -83,3 +83,36 @@ export async function searchPatientsForStaff(
 
   return rows.map(toSummary);
 }
+
+/**
+ * Cari kemungkinan duplikat pasien aktif (NIK sama, atau kombinasi nama + tanggal lahir + No. HP sama)
+ * untuk mencegah pendaftaran ganda pada alur walk-in.
+ */
+export async function findDuplicatePatientForStaff(input: {
+  nik?: string | null;
+  name: string;
+  birthDate: Date;
+  phone?: string | null;
+}): Promise<StaffPatientSummary | null> {
+  if (input.nik) {
+    const byNik = await db.patient.findFirst({
+      where: activePatientWhere({ nik: input.nik }),
+      select: staffPatientSelect,
+    });
+    if (byNik) return toSummary(byNik);
+  }
+
+  if (input.phone) {
+    const byIdentity = await db.patient.findFirst({
+      where: activePatientWhere({
+        name: input.name,
+        birthDate: input.birthDate,
+        phone: input.phone,
+      }),
+      select: staffPatientSelect,
+    });
+    if (byIdentity) return toSummary(byIdentity);
+  }
+
+  return null;
+}

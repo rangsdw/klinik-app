@@ -1,31 +1,39 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { UserPlus } from "lucide-react";
 import { requireStaffType } from "@/lib/rbac";
-import { Button } from "@/components/ui/button";
-import { EmptyState } from "@/components/ui-kit/empty-state";
+import { clinicConfig } from "@/config/clinic";
 import { PageHeader } from "@/components/ui-kit/page-header";
+import { findPatientByIdForStaff } from "@/features/patients/staff-queries";
+import { getTodayWalkInSessions } from "@/features/appointments/queries";
+import { StaffWalkInView } from "@/features/appointments/components/staff-walkin-view";
 
-export const metadata: Metadata = { title: "Pendaftaran Walk-in" };
+export const metadata: Metadata = { title: "Antrean Walk-in" };
 
-export default async function StaffWalkInPage() {
+export default async function StaffWalkInPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ patientId?: string }>;
+}) {
   await requireStaffType("REGISTRATION");
+  const { patientId } = await searchParams;
+
+  const [sessions, preselectedPatient] = await Promise.all([
+    getTodayWalkInSessions(),
+    patientId ? findPatientByIdForStaff(patientId) : Promise.resolve(null),
+  ]);
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Antrean Walk-in"
-        description="Pendaftaran pasien yang datang langsung tanpa janji temu."
+        description="Daftarkan pasien yang datang langsung tanpa janji ke sesi dokter hari ini."
       />
-      <EmptyState
-        icon={UserPlus}
-        title="Modul walk-in disiapkan di langkah berikutnya"
-        description="Halaman pendaftaran pasien walk-in akan diaktifkan pada Langkah 7."
-        action={
-          <Button asChild variant="outline">
-            <Link href="/staf/pendaftaran/check-in">Kembali ke Check-in</Link>
-          </Button>
-        }
+
+      <StaffWalkInView
+        sessions={sessions}
+        preselectedPatient={preselectedPatient}
+        clinicName={clinicConfig.name}
+        clinicAddress={clinicConfig.address}
+        clinicPhone={clinicConfig.phone}
       />
     </div>
   );

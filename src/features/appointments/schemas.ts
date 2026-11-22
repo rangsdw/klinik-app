@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { walkInNewPatientSchema } from "@/features/patients/schemas";
 
 export const DAY_OPTIONS = [
   { value: 1, label: "Senin" },
@@ -149,4 +150,29 @@ export const performCheckInSchema = z.object({
 });
 
 export type PerformCheckInInput = z.infer<typeof performCheckInSchema>;
+
+const walkInBaseFields = {
+  doctorId: z.string().trim().min(1, "Pilih dokter"),
+  scheduleId: z.string().trim().min(1, "Pilih sesi praktik hari ini"),
+  chiefComplaint: z
+    .string()
+    .trim()
+    .min(3, "Keluhan singkat minimal 3 karakter")
+    .max(500, "Keluhan maksimal 500 karakter"),
+};
+
+export const walkInRegistrationSchema = z.discriminatedUnion("mode", [
+  z.object({
+    mode: z.literal("EXISTING"),
+    patientId: z.string().trim().min(1, "Pilih pasien terlebih dahulu"),
+    ...walkInBaseFields,
+  }),
+  z.object({
+    mode: z.literal("NEW"),
+    newPatient: walkInNewPatientSchema,
+    ...walkInBaseFields,
+  }),
+]);
+
+export type WalkInRegistrationInput = z.infer<typeof walkInRegistrationSchema>;
 
