@@ -31,13 +31,28 @@ export async function advancePrescription(formData: FormData): Promise<void> {
           totals.set(item.medicineId, (totals.get(item.medicineId) ?? 0) + item.quantity);
         }
         for (const [medicineId, quantity] of [...totals.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+          const batches = await tx.medicineBatch.findMany({ where: { medicineId, quantity: { gt: 0 }, expiryDate: { gte: new Date(new Date().toISOString().slice(0, 10) + "T00:00:00.000Z") } }, orderBy: [{ expiryDate: "asc" }, { receivedAt: "asc" }, { id: "asc" }] });
+          // Data migrasi lama harus diverifikasi sebelum dipakai untuk dispensing.
+          if (batches.filter(b => b.batchNumber !== "LEGACY-PERLU-VERIFIKASI").reduce((sum, b) => sum + b.quantity, 0) < quantity && batches.some(b => b.batchNumber === "LEGACY-PERLU-VERIFIKASI")) throw new Error("legacy");
+          if (batches.reduce((sum, b) => sum + b.quantity, 0) < quantity) throw new Error("stock");
           const result = await tx.medicine.updateMany({ where: { id: medicineId, isActive: true, stock: { gte: quantity } }, data: { stock: { decrement: quantity } } });
           if (result.count !== 1) throw new Error("stock");
+          let remaining = quantity;
+          let balanceAfter = result.count ? (await tx.medicine.findUniqueOrThrow({ where: { id: medicineId }, select: { stock: true } })).stock + quantity : 0;
+          for (const batch of batches) {
+            if (!remaining) break;
+            const take = Math.min(remaining, batch.quantity);
+            const changed = await tx.medicineBatch.updateMany({ where: { id: batch.id, quantity: { gte: take } }, data: { quantity: { decrement: take } } });
+            if (changed.count !== 1) throw new Error("stock");
+            remaining -= take;
+            balanceAfter -= take;
+            await tx.stockLog.create({ data: { medicineId, batchId: batch.id, type: "OUT", quantity: take, balanceAfter, actorId: user.id, note: `Penyerahan e-resep ${id}` } });
+          }
         }
       }
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (e) {
-    error = e instanceof Error && ["state", "stock", "quantity"].includes(e.message) ? e.message : "retry";
+    error = e instanceof Error && ["state", "stock", "quantity", "legacy"].includes(e.message) ? e.message : "retry";
   }
   revalidatePath(route);
   redirect(error ? `${route}?error=${error}` : `${route}?success=1`);
