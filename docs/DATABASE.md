@@ -13,6 +13,7 @@ Perbarui dokumen ini setiap kali modul menambah atau mengubah tabel.
 | `Gender`       | MALE, FEMALE                                |
 | `Relationship` | SELF, SPOUSE, CHILD, PARENT, SIBLING, OTHER |
 | `BloodType`    | A, B, AB, O                                 |
+| `AppointmentStatus` | PENDING, CONFIRMED, IN_PROGRESS, COMPLETED, CANCELLED, NO_SHOW, REJECTED |
 | `AppointmentSource` | ONLINE, WALK_IN                        |
 
 ## Tabel (Tahap 1 & 2, Rangga)
@@ -72,7 +73,7 @@ Satu baris = satu orang pasien dengan rekam medis dan QR sendiri. Satu akun (Use
 
 ### `counters` (Counter)
 
-Penghitung atomik. Key `rm-<tahun>` untuk nomor rekam medis per tahun (zona Asia/Jakarta).
+Penghitung atomik. Key `rm-<tahun>` untuk nomor rekam medis per tahun dan `queue-<doctorId>-<YYYY-MM-DD>` untuk nomor antrean harian per dokter (zona Asia/Jakarta).
 
 | Kolom | Tipe        | Catatan |
 | ----- | ----------- | ------- |
@@ -116,6 +117,7 @@ Menyimpan jadwal dan sesi pemeriksaan antara pasien dengan dokter.
 | reschedule_note | text | nullable; alasan penjadwalan ulang dari staf pendaftaran |
 | checked_in_at | datetime | nullable; waktu check-in kedatangan pasien oleh staf pendaftaran |
 | checked_in_by_user_id | varchar | nullable; ID staf pendaftaran yang melakukan check-in |
+| called_at | datetime | nullable; waktu pasien dipanggil ke ruang periksa oleh staf pendaftaran |
 | created_at, updated_at | datetime | |
 
 Index tambahan: `(doctor_id, appointment_date, status)`.

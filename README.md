@@ -85,12 +85,16 @@ Seeder idempoten (aman diulang) dan menolak berjalan saat `NODE_ENV=production`.
 | `/dokter`                                                        | DOCTOR                 | Dashboard dokter, daftar pasien, dan form SOAP        |
 | `/staf`                                                          | STAFF sesuai staffType | Dashboard staf                                        |
 | `/staf/pendaftaran`                                              | STAFF (REGISTRATION)   | Jadwal dokter, permintaan janji, approve/reject, reschedule |
+| `/staf/pendaftaran/check-in`                                     | STAFF (REGISTRATION)   | Check-in pasien via pindai QR Code atau pencarian manual |
+| `/staf/pendaftaran/walk-in`                                      | STAFF (REGISTRATION)   | Pendaftaran pasien walk-in (lama/baru) & cetak karcis antrean |
+| `/staf/pendaftaran/antrean`                                      | STAFF (REGISTRATION)   | Papan antrean hari ini per dokter, panggil berikutnya/ulang, tandai tidak hadir |
 | `/staf/farmasi`                                                  | STAFF (PHARMACY)       | Dashboard farmasi, e-resep, etiket, penyerahan obat   |
 | `/staf/kasir`                                                    | STAFF (CASHIER)        | Placeholder kasir (tahap berikutnya)                  |
 | `/pasien`                                                        | PATIENT                | Beranda: pemilih pasien aktif, kartu pasien, pintasan |
 | `/pasien/keluarga`, `/pasien/keluarga/[id]`                      | PATIENT                | Akun keluarga (maks. 10 anggota)                      |
 | `/pasien/janji`                                                  | PATIENT                | Booking janji temu dokter, cek kuota sesi, dan daftar janji |
-| `/pasien/antrean`, `/pasien/riwayat`                             | PATIENT                | Placeholder "Segera hadir" (tahap berikutnya)         |
+| `/pasien/antrean`                                                | PATIENT                | Live queue: nomor antrean Anda, Antrean Sekarang, dan sisa antrean dengan pembaruan otomatis |
+| `/pasien/riwayat`                                                | PATIENT                | Placeholder "Segera hadir" (tahap berikutnya)         |
 | `/pasien/profil`                                                 | PATIENT                | Ubah profil, ganti password, keluar                   |
 | `/_design`                                                       | development saja       | Living style guide semua komponen                     |
 
@@ -113,7 +117,7 @@ src/
     (auth)/          masuk, daftar, lupa-password, reset-password
     (app)/           admin, dokter, staf (sidebar + topbar)
     (patient)/pasien portal pasien (bottom nav di mobile)
-    api/             route handlers (auth)
+    api/             route handlers (auth, polling antrean pasien & staf)
     %5Fdesign/       /_design (style guide, dev saja)
   components/
     ui/              shadcn/ui, disesuaikan dengan design token
@@ -122,7 +126,7 @@ src/
     layout/          sidebar, topbar, bottom nav, brand, 403
     landing/         komponen landing page
   features/
-    appointments/    jadwal dokter, kuota, booking, approve/reject, reschedule
+    appointments/    jadwal dokter, kuota, booking, approve/reject, reschedule, check-in, walk-in, live queue
     auth/            actions, schemas, queries, komponen form
     patients/        actions, queries, schemas, service, mrn (nomor RM), komponen
     users/           akun internal (admin)
@@ -143,6 +147,6 @@ Token ada di `src/app/globals.css` (satu-satunya tempat literal warna/font): pri
 - **Halaman staf**: `src/app/(app)/staf/farmasi` dan `/kasir` (Axel), sudah dijaga `requireStaffType`.
 - **Rekam medis** (Ravy): model `Patient` punya `allergies` dan `specialConditions` untuk Red Flag; lihat TODO di `deletePatientAction` untuk mencegah hapus pasien yang sudah punya kunjungan.
 - **Schema**: tambah model di blok bertanda tiap modul di `prisma/schema.prisma`, lalu `npm run db:migrate`. Perbarui `docs/DATABASE.md`.
-- **QR**: `Patient.qrToken` sudah dibuat otomatis; gambar QR dan check-in di Tahap 4.
+- **QR**: `Patient.qrToken` dibuat otomatis per pasien; dialog QR (SVG/PNG/cetak/regenerasi), check-in (`/staf/pendaftaran/check-in`), walk-in (`/staf/pendaftaran/walk-in`), dan live queue (`/pasien/antrean`, `/staf/pendaftaran/antrean`) sudah tersedia. Fungsi query bersama `getDoctorQueue(doctorId, dateStr)` di `src/features/appointments/queries.ts` siap dipakai modul dokter (Ravy).
 
 Lihat juga [docs/DATABASE.md](docs/DATABASE.md).

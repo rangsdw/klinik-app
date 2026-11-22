@@ -15,9 +15,12 @@ import {
 } from "@/features/patients/staff-queries";
 import {
   bookAppointmentSchema,
+  callNextQueueSchema,
   checkInLookupSchema,
   doctorScheduleSchema,
+  markNoShowSchema,
   performCheckInSchema,
+  recallQueueSchema,
   rejectAppointmentSchema,
   rescheduleAppointmentSchema,
   walkInRegistrationSchema,
@@ -36,15 +39,18 @@ import {
   approveAppointmentByStaff,
   assertValidScheduleSlot,
   bookAppointmentForPatient,
+  callNextQueueByStaff,
   cancelPatientAppointment,
   DuplicateAppointmentError,
   DuplicatePatientError,
   InvalidAppointmentStateError,
   InvalidBookingDateError,
   lookupPatientCheckInToday,
+  markAppointmentNoShowByStaff,
   PatientNotOwnedError,
   performAppointmentCheckIn,
   QuotaFullError,
+  recallQueueByStaff,
   registerWalkInAppointment,
   rejectAppointmentByStaff,
   rescheduleAppointmentByStaff,
@@ -97,7 +103,10 @@ export async function createScheduleAction(
     if (error instanceof ScheduleOverlapError) {
       return { ok: false, fieldErrors: { startTime: error.message } };
     }
-    return { ok: false, message: error instanceof Error ? error.message : "Data jadwal tidak valid." };
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Data jadwal tidak valid.",
+    };
   }
 
   const created = await db.doctorSchedule.create({
@@ -113,7 +122,11 @@ export async function createScheduleAction(
   });
 
   revalidateSchedulePages();
-  return { ok: true, message: "Sesi jadwal dokter berhasil ditambahkan.", data: { id: created.id } };
+  return {
+    ok: true,
+    message: "Sesi jadwal dokter berhasil ditambahkan.",
+    data: { id: created.id },
+  };
 }
 
 export async function updateScheduleAction(
@@ -156,7 +169,10 @@ export async function updateScheduleAction(
       if (error instanceof ScheduleOverlapError) {
         return { ok: false, fieldErrors: { startTime: error.message } };
       }
-      return { ok: false, message: error instanceof Error ? error.message : "Data jadwal tidak valid." };
+      return {
+        ok: false,
+        message: error instanceof Error ? error.message : "Data jadwal tidak valid.",
+      };
     }
   }
 
@@ -235,8 +251,10 @@ export async function toggleScheduleStatusAction(
 
 function revalidateAppointmentPages() {
   revalidatePath("/pasien/janji");
+  revalidatePath("/pasien/antrean");
   revalidatePath("/pasien");
   revalidatePath("/staf/pendaftaran");
+  revalidatePath("/staf/pendaftaran/antrean");
   revalidatePath("/dokter");
 }
 
@@ -446,7 +464,9 @@ export async function lookupCheckInAction(
 
   const query = parsed.data.query;
   if (query.toUpperCase().startsWith(QR_PREFIX)) {
-    const token = parsePatientQr(query.startsWith(QR_PREFIX) ? query : `${QR_PREFIX}${query.slice(QR_PREFIX.length)}`);
+    const token = parsePatientQr(
+      query.startsWith(QR_PREFIX) ? query : `${QR_PREFIX}${query.slice(QR_PREFIX.length)}`,
+    );
     if (!token) {
       return { ok: false, message: "Kode QR tidak valid atau pasien tidak ditemukan." };
     }
@@ -603,6 +623,96 @@ export async function registerWalkInAction(
       error instanceof InvalidBookingDateError ||
       error instanceof InvalidAppointmentStateError
     ) {
+      return { ok: false, message: error.message };
+    }
+    throw error;
+  }
+}
+
+export async function callNextQueueAction(
+  doctorId: string,
+): Promise<
+  ActionResult<{ appointmentId: string; formattedQueueNumber: string; patientName: string }>
+> {
+  const staff = await requireStaffType("REGISTRATION");
+
+  const parsed = callNextQueueSchema.safeParse({ doctorId });
+  if (!parsed.success) {
+    return { ok: false, message: "Dokter wajib dipilih." };
+  }
+
+  try {
+    const res = await callNextQueueByStaff(staff.id, parsed.data.doctorId);
+    revalidatePath("/staf/pendaftaran/antrean");
+    revalidatePath("/pasien/antrean");
+    revalidatePath("/dokter");
+    return {
+      ok: true,
+      message: `Memanggil antrean ${res.formattedQueueNumber} (${res.patientName}).`,
+      data: {
+        appointmentId: res.appointmentId,
+        formattedQueueNumber: res.formattedQueueNumber,
+        patientName: res.patientName,
+      },
+    };
+  } catch (error) {
+    if (error instanceof InvalidAppointmentStateError) {
+      return { ok: false, message: error.message };
+    }
+    throw error;
+  }
+}
+
+export async function recallQueueAction(
+  appointmentId: string,
+): Promise<ActionResult<{ appointmentId: string; formattedQueueNumber: string | null }>> {
+  const staff = await requireStaffType("REGISTRATION");
+
+  const parsed = recallQueueSchema.safeParse({ appointmentId });
+  if (!parsed.success) {
+    return { ok: false, message: "Data antrean tidak valid." };
+  }
+
+  try {
+    const res = await recallQueueByStaff(staff.id, parsed.data.appointmentId);
+    revalidatePath("/staf/pendaftaran/antrean");
+    revalidatePath("/pasien/antrean");
+    revalidatePath("/dokter");
+    const queueLabel = res.formattedQueueNumber ? ` ${res.formattedQueueNumber}` : "";
+    return {
+      ok: true,
+      message: `Memanggil ulang antrean${queueLabel} (${res.patientName}).`,
+      data: {
+        appointmentId: res.appointmentId,
+        formattedQueueNumber: res.formattedQueueNumber,
+      },
+    };
+  } catch (error) {
+    if (error instanceof InvalidAppointmentStateError) {
+      return { ok: false, message: error.message };
+    }
+    throw error;
+  }
+}
+
+export async function markNoShowAction(appointmentId: string): Promise<ActionResult> {
+  const staff = await requireStaffType("REGISTRATION");
+
+  const parsed = markNoShowSchema.safeParse({ appointmentId });
+  if (!parsed.success) {
+    return { ok: false, message: "Data antrean tidak valid." };
+  }
+
+  try {
+    const res = await markAppointmentNoShowByStaff(staff.id, parsed.data.appointmentId);
+    revalidateAppointmentPages();
+    const queueLabel = res.formattedQueueNumber ? ` ${res.formattedQueueNumber}` : "";
+    return {
+      ok: true,
+      message: `Antrean${queueLabel} (${res.patientName}) ditandai tidak hadir.`,
+    };
+  } catch (error) {
+    if (error instanceof InvalidAppointmentStateError) {
       return { ok: false, message: error.message };
     }
     throw error;

@@ -1,5 +1,5 @@
 import "server-only";
-import type { AppointmentStatus } from "@prisma/client";
+import type { AppointmentSource, AppointmentStatus } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
   dayOfWeekFromDateStr,
@@ -9,7 +9,13 @@ import {
   toDateInput,
 } from "@/lib/date";
 import { activePatientWhere } from "@/features/patients/queries";
-import { ACTIVE_QUOTA_STATUSES, DATE_REGEX, formatQueueNumber } from "@/features/appointments/schemas";
+import {
+  ACTIVE_QUOTA_STATUSES,
+  DATE_REGEX,
+  formatQueueNumber,
+  type PatientQueueDisplayStatus,
+  type QueueDisplayStatus,
+} from "@/features/appointments/schemas";
 import { getQuotaStatus, timeToMinutes } from "@/features/appointments/service";
 
 export type DoctorOption = {
@@ -466,4 +472,472 @@ export async function getTodayWalkInSessions(
       isEnded: nowMinutes > timeToMinutes(s.endTime),
     };
   });
+}
+
+export type DoctorQueueItem = {
+  id: string;
+  patientId: string;
+  patientName: string;
+  medicalRecordNumber: string;
+  source: AppointmentSource;
+  startTime: string;
+  endTime: string;
+  queueNumber: number | null;
+  formattedQueueNumber: string | null;
+  status: AppointmentStatus;
+  displayStatus: QueueDisplayStatus;
+  checkedInAt: string | null;
+  calledAt: string | null;
+};
+
+export type DoctorQueueStats = {
+  waiting: number;
+  called: number;
+  inService: number;
+  calledOrInService: number;
+  completed: number;
+  walkIn: number;
+  noShow: number;
+  notArrived: number;
+  total: number;
+};
+
+export type DoctorQueueSnapshot = {
+  doctorId: string;
+  doctorName: string;
+  dateStr: string;
+  currentAppointmentId: string | null;
+  currentQueueNumber: number | null;
+  formattedCurrentQueueNumber: string | null;
+  items: DoctorQueueItem[];
+  stats: DoctorQueueStats;
+};
+
+/**
+ * Turunkan status tampilan antrean tanpa mengubah arti status dasar modul dokter:
+ * - IN_PROGRESS -> Sedang dilayani (diset modul dokter)
+ * - COMPLETED -> Selesai
+ * - NO_SHOW -> Tidak hadir
+ * - CONFIRMED + calledAt -> Dipanggil (staf)
+ * - CONFIRMED + checkedInAt (tanpa calledAt) -> Menunggu
+ * - CONFIRMED tanpa checkedInAt -> Belum datang
+ */
+export function deriveQueueDisplayStatus(row: {
+  status: AppointmentStatus;
+  checkedInAt: Date | null;
+  calledAt: Date | null;
+}): QueueDisplayStatus {
+  if (row.status === "IN_PROGRESS") return "IN_SERVICE";
+  if (row.status === "COMPLETED") return "COMPLETED";
+  if (row.status === "NO_SHOW") return "NO_SHOW";
+  if (row.calledAt !== null) return "CALLED";
+  if (row.checkedInAt !== null) return "WAITING";
+  return "NOT_ARRIVED";
+}
+
+type CurrentQueueCandidate = {
+  id: string;
+  queueNumber: number | null;
+  status: AppointmentStatus;
+  calledAt: Date | null;
+  updatedAt: Date;
+};
+
+function resolveCurrentQueue(rows: CurrentQueueCandidate[]): {
+  appointmentId: string;
+  queueNumber: number;
+  formattedQueueNumber: string;
+} | null {
+  const inProgress = rows
+    .filter((r) => r.status === "IN_PROGRESS" && r.queueNumber !== null)
+    .sort((a, b) => {
+      const diff = b.updatedAt.getTime() - a.updatedAt.getTime();
+      return diff !== 0 ? diff : (a.queueNumber ?? 0) - (b.queueNumber ?? 0);
+    });
+
+  if (inProgress[0] && inProgress[0].queueNumber !== null) {
+    return {
+      appointmentId: inProgress[0].id,
+      queueNumber: inProgress[0].queueNumber,
+      formattedQueueNumber: formatQueueNumber(inProgress[0].queueNumber),
+    };
+  }
+
+  const called = rows
+    .filter((r) => r.status === "CONFIRMED" && r.calledAt !== null && r.queueNumber !== null)
+    .sort((a, b) => {
+      const diff = (b.calledAt?.getTime() ?? 0) - (a.calledAt?.getTime() ?? 0);
+      return diff !== 0 ? diff : (b.queueNumber ?? 0) - (a.queueNumber ?? 0);
+    });
+
+  if (called[0] && called[0].queueNumber !== null) {
+    return {
+      appointmentId: called[0].id,
+      queueNumber: called[0].queueNumber,
+      formattedQueueNumber: formatQueueNumber(called[0].queueNumber),
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Query bersama antrean dokter untuk tanggal tertentu (default hari ini Asia/Jakarta).
+ * Dipakai oleh papan antrean staf (`/staf/pendaftaran/antrean`) maupun integrasi modul dokter
+ * tanpa mengubah arti status `IN_PROGRESS` / `COMPLETED`.
+ *
+ * Mengembalikan urutan item antrean berdasarkan `queueNumber` ascending, status tampilan
+ * tiap nomor (`NOT_ARRIVED` | `WAITING` | `CALLED` | `IN_SERVICE` | `COMPLETED` | `NO_SHOW`),
+ * nomor "Antrean Sekarang" (nomor `IN_PROGRESS`, atau bila tidak ada, nomor `CALLED` terbaru),
+ * serta ringkasan statistik harian dokter. Mengembalikan `null` jika dokter tidak ditemukan.
+ */
+export async function getDoctorQueue(
+  doctorId: string,
+  dateStr: string = jakartaTodayStr(),
+): Promise<DoctorQueueSnapshot | null> {
+  if (!doctorId || !DATE_REGEX.test(dateStr)) return null;
+
+  const targetDate = parseDateOnlyUtc(dateStr);
+
+  const [doctor, rows] = await Promise.all([
+    db.user.findUnique({
+      where: { id: doctorId },
+      select: { id: true, name: true, role: true },
+    }),
+    db.appointment.findMany({
+      where: {
+        doctorId,
+        appointmentDate: targetDate,
+        status: { in: ["CONFIRMED", "IN_PROGRESS", "COMPLETED", "NO_SHOW"] },
+        patient: activePatientWhere(),
+      },
+      select: {
+        id: true,
+        patientId: true,
+        source: true,
+        startTime: true,
+        endTime: true,
+        queueNumber: true,
+        status: true,
+        checkedInAt: true,
+        calledAt: true,
+        updatedAt: true,
+        createdAt: true,
+        patient: { select: { name: true, medicalRecordNumber: true } },
+      },
+      orderBy: [{ queueNumber: "asc" }, { startTime: "asc" }, { createdAt: "asc" }],
+    }),
+  ]);
+
+  if (!doctor || doctor.role !== "DOCTOR") return null;
+
+  const sortedRows = [...rows].sort((a, b) => {
+    if (a.queueNumber !== null && b.queueNumber !== null) {
+      return a.queueNumber - b.queueNumber;
+    }
+    if (a.queueNumber !== null) return -1;
+    if (b.queueNumber !== null) return 1;
+    return a.startTime.localeCompare(b.startTime);
+  });
+
+  const current = resolveCurrentQueue(sortedRows);
+
+  const stats: DoctorQueueStats = {
+    waiting: 0,
+    called: 0,
+    inService: 0,
+    calledOrInService: 0,
+    completed: 0,
+    walkIn: 0,
+    noShow: 0,
+    notArrived: 0,
+    total: sortedRows.length,
+  };
+
+  const items: DoctorQueueItem[] = sortedRows.map((r) => {
+    const displayStatus = deriveQueueDisplayStatus(r);
+    if (displayStatus === "WAITING") stats.waiting += 1;
+    if (displayStatus === "CALLED") stats.called += 1;
+    if (displayStatus === "IN_SERVICE") stats.inService += 1;
+    if (displayStatus === "COMPLETED") stats.completed += 1;
+    if (displayStatus === "NO_SHOW") stats.noShow += 1;
+    if (displayStatus === "NOT_ARRIVED") stats.notArrived += 1;
+    if (r.source === "WALK_IN") stats.walkIn += 1;
+
+    return {
+      id: r.id,
+      patientId: r.patientId,
+      patientName: r.patient.name,
+      medicalRecordNumber: r.patient.medicalRecordNumber,
+      source: r.source,
+      startTime: r.startTime,
+      endTime: r.endTime,
+      queueNumber: r.queueNumber,
+      formattedQueueNumber: r.queueNumber !== null ? formatQueueNumber(r.queueNumber) : null,
+      status: r.status,
+      displayStatus,
+      checkedInAt: r.checkedInAt ? r.checkedInAt.toISOString() : null,
+      calledAt: r.calledAt ? r.calledAt.toISOString() : null,
+    };
+  });
+
+  stats.calledOrInService = stats.called + stats.inService;
+
+  return {
+    doctorId: doctor.id,
+    doctorName: doctor.name,
+    dateStr,
+    currentAppointmentId: current?.appointmentId ?? null,
+    currentQueueNumber: current?.queueNumber ?? null,
+    formattedCurrentQueueNumber: current?.formattedQueueNumber ?? null,
+    items,
+    stats,
+  };
+}
+
+export type StaffQueueBoardPayload = {
+  dateStr: string;
+  updatedAt: string;
+  totals: {
+    waiting: number;
+    calledOrInService: number;
+    completed: number;
+    walkIn: number;
+    noShow: number;
+    total: number;
+  };
+  doctors: DoctorQueueSnapshot[];
+};
+
+/** Data papan antrean hari ini seluruh dokter yang praktik untuk staf pendaftaran. */
+export async function getStaffQueueBoardData(
+  todayStr: string = jakartaTodayStr(),
+): Promise<StaffQueueBoardPayload> {
+  const dayOfWeek = dayOfWeekFromDateStr(todayStr);
+  const targetDate = parseDateOnlyUtc(todayStr);
+
+  const [scheduledDoctors, queuedDoctors] = await Promise.all([
+    db.doctorSchedule.findMany({
+      where: {
+        dayOfWeek,
+        isActive: true,
+        doctor: { role: "DOCTOR", isActive: true },
+      },
+      select: { doctorId: true },
+      distinct: ["doctorId"],
+    }),
+    db.appointment.findMany({
+      where: {
+        appointmentDate: targetDate,
+        status: { in: ["CONFIRMED", "IN_PROGRESS", "COMPLETED", "NO_SHOW"] },
+        patient: activePatientWhere(),
+      },
+      select: { doctorId: true },
+      distinct: ["doctorId"],
+    }),
+  ]);
+
+  const doctorIds = Array.from(
+    new Set([...scheduledDoctors.map((s) => s.doctorId), ...queuedDoctors.map((a) => a.doctorId)]),
+  );
+
+  const snapshots = (await Promise.all(doctorIds.map((id) => getDoctorQueue(id, todayStr))))
+    .filter((snap): snap is DoctorQueueSnapshot => snap !== null)
+    .sort((a, b) => a.doctorName.localeCompare(b.doctorName, "id"));
+
+  const totals = {
+    waiting: 0,
+    calledOrInService: 0,
+    completed: 0,
+    walkIn: 0,
+    noShow: 0,
+    total: 0,
+  };
+
+  for (const doc of snapshots) {
+    totals.waiting += doc.stats.waiting;
+    totals.calledOrInService += doc.stats.calledOrInService;
+    totals.completed += doc.stats.completed;
+    totals.walkIn += doc.stats.walkIn;
+    totals.noShow += doc.stats.noShow;
+    totals.total += doc.stats.total;
+  }
+
+  return {
+    dateStr: todayStr,
+    updatedAt: new Date().toISOString(),
+    totals,
+    doctors: snapshots,
+  };
+}
+
+export type PatientLiveQueueItem = {
+  appointmentId: string;
+  patientName: string;
+  doctorName: string;
+  appointmentDate: string;
+  startTime: string;
+  endTime: string;
+  source: AppointmentSource;
+  queueNumber: number | null;
+  formattedQueueNumber: string | null;
+  currentQueueNumber: number | null;
+  formattedCurrentQueueNumber: string | null;
+  aheadCount: number | null;
+  displayStatus: PatientQueueDisplayStatus;
+};
+
+export type PatientLiveQueuePayload = {
+  dateStr: string;
+  updatedAt: string;
+  items: PatientLiveQueueItem[];
+};
+
+function derivePatientQueueDisplayStatus(row: {
+  status: AppointmentStatus;
+  checkedInAt: Date | null;
+  calledAt: Date | null;
+}): PatientQueueDisplayStatus {
+  if (row.status === "PENDING") return "PENDING";
+  if (row.status === "IN_PROGRESS") return "IN_SERVICE";
+  if (row.status === "COMPLETED") return "COMPLETED";
+  if (row.calledAt !== null) return "CALLED";
+  if (row.checkedInAt !== null) return "WAITING";
+  return "CONFIRMED_NOT_CHECKED_IN";
+}
+
+/**
+ * Ambil status live queue HANYA milik akun pasien yang login untuk hari ini.
+ * Ketat privasi: query antrean publik hanya membaca status & nomor antrean tanpa data/nama pasien lain.
+ */
+export async function getPatientLiveQueueData(
+  accountUserId: string,
+  todayStr: string = jakartaTodayStr(),
+): Promise<PatientLiveQueuePayload> {
+  const targetDate = parseDateOnlyUtc(todayStr);
+
+  const ownRows = await db.appointment.findMany({
+    where: {
+      appointmentDate: targetDate,
+      status: { in: ["PENDING", "CONFIRMED", "IN_PROGRESS", "COMPLETED"] },
+      patient: activePatientWhere({ accountUserId }),
+    },
+    select: {
+      id: true,
+      doctorId: true,
+      startTime: true,
+      endTime: true,
+      source: true,
+      queueNumber: true,
+      status: true,
+      checkedInAt: true,
+      calledAt: true,
+      patient: { select: { name: true } },
+      doctor: { select: { name: true } },
+    },
+    orderBy: [{ startTime: "asc" }, { queueNumber: "asc" }, { createdAt: "asc" }],
+  });
+
+  if (ownRows.length === 0) {
+    return {
+      dateStr: todayStr,
+      updatedAt: new Date().toISOString(),
+      items: [],
+    };
+  }
+
+  const doctorIds = Array.from(new Set(ownRows.map((r) => r.doctorId)));
+
+  // Jangan pernah men-select nama, ID, atau No. RM pasien lain dari database.
+  const queueRows = await db.appointment.findMany({
+    where: {
+      doctorId: { in: doctorIds },
+      appointmentDate: targetDate,
+      status: { in: ["CONFIRMED", "IN_PROGRESS"] },
+      patient: activePatientWhere(),
+    },
+    select: {
+      id: true,
+      doctorId: true,
+      status: true,
+      queueNumber: true,
+      checkedInAt: true,
+      calledAt: true,
+      updatedAt: true,
+    },
+  });
+
+  const rowsByDoctor = new Map<string, typeof queueRows>();
+  for (const row of queueRows) {
+    const list = rowsByDoctor.get(row.doctorId) ?? [];
+    list.push(row);
+    rowsByDoctor.set(row.doctorId, list);
+  }
+
+  const doctorSummaryMap = new Map<
+    string,
+    {
+      currentQueueNumber: number | null;
+      formattedCurrentQueueNumber: string | null;
+      waitingQueueNumbers: number[];
+    }
+  >();
+
+  for (const doctorId of doctorIds) {
+    const docRows = rowsByDoctor.get(doctorId) ?? [];
+    const current = resolveCurrentQueue(docRows);
+    const waitingQueueNumbers = docRows
+      .filter(
+        (r) =>
+          r.status === "CONFIRMED" &&
+          r.checkedInAt !== null &&
+          r.calledAt === null &&
+          r.queueNumber !== null,
+      )
+      .map((r) => r.queueNumber as number);
+
+    doctorSummaryMap.set(doctorId, {
+      currentQueueNumber: current?.queueNumber ?? null,
+      formattedCurrentQueueNumber: current?.formattedQueueNumber ?? null,
+      waitingQueueNumbers,
+    });
+  }
+
+  const items: PatientLiveQueueItem[] = ownRows.map((r) => {
+    const displayStatus = derivePatientQueueDisplayStatus(r);
+    const docSummary = doctorSummaryMap.get(r.doctorId);
+    let aheadCount: number | null = null;
+
+    if (
+      displayStatus === "CALLED" ||
+      displayStatus === "IN_SERVICE" ||
+      displayStatus === "COMPLETED"
+    ) {
+      aheadCount = 0;
+    } else if (r.queueNumber !== null && docSummary) {
+      aheadCount = docSummary.waitingQueueNumbers.filter((n) => n < r.queueNumber!).length;
+    }
+
+    return {
+      appointmentId: r.id,
+      patientName: r.patient.name,
+      doctorName: r.doctor.name,
+      appointmentDate: todayStr,
+      startTime: r.startTime,
+      endTime: r.endTime,
+      source: r.source,
+      queueNumber: r.queueNumber,
+      formattedQueueNumber: r.queueNumber !== null ? formatQueueNumber(r.queueNumber) : null,
+      currentQueueNumber: docSummary?.currentQueueNumber ?? null,
+      formattedCurrentQueueNumber: docSummary?.formattedCurrentQueueNumber ?? null,
+      aheadCount,
+      displayStatus,
+    };
+  });
+
+  return {
+    dateStr: todayStr,
+    updatedAt: new Date().toISOString(),
+    items,
+  };
 }

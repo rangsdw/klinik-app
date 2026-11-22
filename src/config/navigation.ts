@@ -65,6 +65,13 @@ export const appNavigation: NavItem[] = [
     staffTypes: ["REGISTRATION"],
   },
   {
+    title: "Antrean Hari Ini",
+    href: "/staf/pendaftaran/antrean",
+    icon: ListOrdered,
+    roles: ["STAFF"],
+    staffTypes: ["REGISTRATION"],
+  },
+  {
     title: "Farmasi",
     href: "/staf/farmasi",
     icon: Pill,

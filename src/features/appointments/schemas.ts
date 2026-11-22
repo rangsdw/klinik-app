@@ -34,14 +34,8 @@ export const doctorScheduleSchema = z
       .int("Hari tidak valid")
       .min(0, "Hari tidak valid")
       .max(6, "Hari tidak valid"),
-    startTime: z
-      .string()
-      .trim()
-      .regex(TIME_REGEX, "Format jam mulai harus HH:mm (contoh: 08:00)"),
-    endTime: z
-      .string()
-      .trim()
-      .regex(TIME_REGEX, "Format jam selesai harus HH:mm (contoh: 12:00)"),
+    startTime: z.string().trim().regex(TIME_REGEX, "Format jam mulai harus HH:mm (contoh: 08:00)"),
+    endTime: z.string().trim().regex(TIME_REGEX, "Format jam selesai harus HH:mm (contoh: 12:00)"),
     quota: z.coerce
       .number({ invalid_type_error: "Kuota harus berupa angka" })
       .int("Kuota harus bilangan bulat")
@@ -60,13 +54,7 @@ export const MAX_BOOKING_DAYS_AHEAD = 30;
 export const ACTIVE_QUOTA_STATUSES = ["PENDING", "CONFIRMED", "IN_PROGRESS", "COMPLETED"] as const;
 
 export type AppointmentStatusKey =
-  | "PENDING"
-  | "CONFIRMED"
-  | "IN_PROGRESS"
-  | "COMPLETED"
-  | "CANCELLED"
-  | "NO_SHOW"
-  | "REJECTED";
+  "PENDING" | "CONFIRMED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED" | "NO_SHOW" | "REJECTED";
 
 export const APPOINTMENT_STATUS_LABEL: Record<AppointmentStatusKey, string> = {
   PENDING: "Menunggu Persetujuan",
@@ -176,3 +164,62 @@ export const walkInRegistrationSchema = z.discriminatedUnion("mode", [
 
 export type WalkInRegistrationInput = z.infer<typeof walkInRegistrationSchema>;
 
+export type QueueDisplayStatus =
+  "NOT_ARRIVED" | "WAITING" | "CALLED" | "IN_SERVICE" | "COMPLETED" | "NO_SHOW";
+
+export const QUEUE_DISPLAY_STATUS_LABEL: Record<QueueDisplayStatus, string> = {
+  NOT_ARRIVED: "Belum datang",
+  WAITING: "Menunggu",
+  CALLED: "Dipanggil",
+  IN_SERVICE: "Sedang dilayani",
+  COMPLETED: "Selesai",
+  NO_SHOW: "Tidak hadir",
+};
+
+export const QUEUE_DISPLAY_STATUS_VARIANT: Record<
+  QueueDisplayStatus,
+  "success" | "warning" | "danger" | "info" | "neutral"
+> = {
+  NOT_ARRIVED: "neutral",
+  WAITING: "info",
+  CALLED: "warning",
+  IN_SERVICE: "success",
+  COMPLETED: "neutral",
+  NO_SHOW: "danger",
+};
+
+export type PatientQueueDisplayStatus =
+  "PENDING" | "CONFIRMED_NOT_CHECKED_IN" | "WAITING" | "CALLED" | "IN_SERVICE" | "COMPLETED";
+
+export const PATIENT_QUEUE_STATUS_LABEL: Record<PatientQueueDisplayStatus, string> = {
+  PENDING: "Menunggu persetujuan",
+  CONFIRMED_NOT_CHECKED_IN: "Disetujui, belum check-in",
+  WAITING: "Sudah check-in, menunggu",
+  CALLED: "Dipanggil",
+  IN_SERVICE: "Sedang dilayani",
+  COMPLETED: "Selesai",
+};
+
+export const PATIENT_QUEUE_STATUS_VARIANT: Record<
+  PatientQueueDisplayStatus,
+  "success" | "warning" | "danger" | "info" | "neutral"
+> = {
+  PENDING: "warning",
+  CONFIRMED_NOT_CHECKED_IN: "info",
+  WAITING: "info",
+  CALLED: "success",
+  IN_SERVICE: "success",
+  COMPLETED: "neutral",
+};
+
+export const callNextQueueSchema = z.object({
+  doctorId: z.string().trim().min(1, "Dokter wajib dipilih"),
+});
+
+export const recallQueueSchema = z.object({
+  appointmentId: z.string().trim().min(1, "ID janji temu wajib diisi"),
+});
+
+export const markNoShowSchema = z.object({
+  appointmentId: z.string().trim().min(1, "ID janji temu wajib diisi"),
+});
