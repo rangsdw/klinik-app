@@ -183,9 +183,11 @@ model Appointment {
   status          AppointmentStatus @default(PENDING)
   chiefComplaint  String?           @map("chief_complaint") @db.Text
   rejectionReason String?           @map("rejection_reason") @db.Text
-  rescheduledAt   DateTime?         @map("rescheduled_at")
-  rescheduleNote  String?           @map("reschedule_note") @db.Text
-  createdAt       DateTime          @default(now()) @map("created_at")
+  rescheduledAt     DateTime?         @map("rescheduled_at")
+  rescheduleNote    String?           @map("reschedule_note") @db.Text
+  checkedInAt       DateTime?         @map("checked_in_at")
+  checkedInByUserId String?           @map("checked_in_by_user_id")
+  createdAt         DateTime          @default(now()) @map("created_at")
   updatedAt       DateTime          @updatedAt @map("updated_at")
 
   patient         Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
@@ -196,6 +198,7 @@ model Appointment {
 
   @@index([patientId])
   @@index([doctorId, appointmentDate])
+  @@index([doctorId, appointmentDate, status])
   @@index([scheduleId, appointmentDate])
   @@map("appointments")
 }

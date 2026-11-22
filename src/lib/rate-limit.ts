@@ -46,9 +46,17 @@ export class MemoryRateLimiter implements RateLimiter {
   }
 }
 
-const globalForLimiter = globalThis as unknown as { loginLimiter?: RateLimiter };
+const globalForLimiter = globalThis as unknown as {
+  loginLimiter?: RateLimiter;
+  checkInScanLimiter?: RateLimiter;
+};
 
 /** 5 percobaan per menit per kombinasi identifier + IP. */
 export const loginLimiter: RateLimiter =
   globalForLimiter.loginLimiter ?? new MemoryRateLimiter(5, 60_000);
 globalForLimiter.loginLimiter = loginLimiter;
+
+/** 30 pemindaian / pencarian check-in per menit per staf pendaftaran. */
+export const checkInScanLimiter: RateLimiter =
+  globalForLimiter.checkInScanLimiter ?? new MemoryRateLimiter(30, 60_000);
+globalForLimiter.checkInScanLimiter = checkInScanLimiter;

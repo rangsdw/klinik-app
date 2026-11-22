@@ -1,5 +1,5 @@
 import "server-only";
-import type { Prisma } from "@prisma/client";
+import type { AppointmentStatus, Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
   addDaysToDateStr,
@@ -10,11 +10,16 @@ import {
 } from "@/lib/date";
 import { getOwnedPatient } from "@/features/patients/queries";
 import {
+  findPatientByIdForStaff,
+  type StaffPatientSummary,
+} from "@/features/patients/staff-queries";
+import {
   ACTIVE_QUOTA_STATUSES,
   DATE_REGEX,
   formatQueueNumber,
   MAX_BOOKING_DAYS_AHEAD,
   type BookAppointmentInput,
+  type PerformCheckInInput,
   type RejectAppointmentInput,
   type RescheduleAppointmentInput,
 } from "@/features/appointments/schemas";
@@ -651,4 +656,173 @@ export async function rescheduleAppointmentByStaff(
     queueNumber: result.queueNumber,
     formattedQueueNumber: result.formattedQueueNumber,
   };
+}
+
+export type CheckInAppointmentItem = {
+  id: string;
+  doctorId: string;
+  doctorName: string;
+  startTime: string;
+  endTime: string;
+  queueNumber: number | null;
+  formattedQueueNumber: string | null;
+  status: AppointmentStatus;
+  checkedInAt: Date | null;
+};
+
+export type CheckInLookupResult = {
+  patient: StaffPatientSummary;
+  method: "QR" | "MANUAL";
+  eligibleConfirmed: CheckInAppointmentItem[];
+  alreadyCheckedIn: CheckInAppointmentItem[];
+  pendingAppointments: CheckInAppointmentItem[];
+};
+
+/**
+ * Ambil daftar janji pasien hari ini untuk layar check-in staf.
+ * Hanya mengembalikan data minimum pasien (tanpa alergi/kondisi medis).
+ */
+export async function lookupPatientCheckInToday(
+  patientId: string,
+  method: "QR" | "MANUAL",
+  todayStr: string = jakartaTodayStr(),
+): Promise<CheckInLookupResult | null> {
+  const patient = await findPatientByIdForStaff(patientId);
+  if (!patient) return null;
+
+  const rows = await db.appointment.findMany({
+    where: {
+      patientId: patient.id,
+      appointmentDate: parseDateOnlyUtc(todayStr),
+      status: { in: ["PENDING", "CONFIRMED", "IN_PROGRESS", "COMPLETED"] },
+    },
+    include: {
+      doctor: { select: { name: true } },
+    },
+    orderBy: [{ startTime: "asc" }, { createdAt: "asc" }],
+  });
+
+  const mapped: CheckInAppointmentItem[] = rows.map((r) => ({
+    id: r.id,
+    doctorId: r.doctorId,
+    doctorName: r.doctor.name,
+    startTime: r.startTime,
+    endTime: r.endTime,
+    queueNumber: r.queueNumber,
+    formattedQueueNumber: r.queueNumber !== null ? formatQueueNumber(r.queueNumber) : null,
+    status: r.status,
+    checkedInAt: r.checkedInAt,
+  }));
+
+  return {
+    patient,
+    method,
+    eligibleConfirmed: mapped.filter((a) => a.status === "CONFIRMED" && a.checkedInAt === null),
+    alreadyCheckedIn: mapped.filter((a) => a.checkedInAt !== null),
+    pendingAppointments: mapped.filter((a) => a.status === "PENDING"),
+  };
+}
+
+/**
+ * Catat kedatangan (check-in) untuk janji CONFIRMED hari ini.
+ * Idempoten dan aman dari klik ganda / dua staf bersamaan (update bersyarat checkedInAt IS NULL).
+ */
+export async function performAppointmentCheckIn(
+  staffUserId: string,
+  input: PerformCheckInInput,
+  todayStr: string = jakartaTodayStr(),
+): Promise<{
+  alreadyCheckedIn: boolean;
+  checkedInAt: Date;
+  queueNumber: number | null;
+  formattedQueueNumber: string | null;
+}> {
+  const appointment = await db.appointment.findUnique({
+    where: { id: input.appointmentId },
+    select: {
+      id: true,
+      appointmentDate: true,
+      status: true,
+      checkedInAt: true,
+      queueNumber: true,
+    },
+  });
+
+  if (!appointment) {
+    throw new InvalidAppointmentStateError("Janji temu tidak ditemukan.");
+  }
+
+  if (toDateInput(appointment.appointmentDate) !== todayStr) {
+    throw new InvalidAppointmentStateError("Hanya janji temu hari ini yang dapat di-check-in.");
+  }
+
+  if (appointment.status === "PENDING") {
+    throw new InvalidAppointmentStateError("Janji belum disetujui.");
+  }
+
+  if (appointment.status !== "CONFIRMED") {
+    throw new InvalidAppointmentStateError("Status janji temu ini tidak dapat di-check-in.");
+  }
+
+  if (appointment.checkedInAt !== null) {
+    return {
+      alreadyCheckedIn: true,
+      checkedInAt: appointment.checkedInAt,
+      queueNumber: appointment.queueNumber,
+      formattedQueueNumber:
+        appointment.queueNumber !== null ? formatQueueNumber(appointment.queueNumber) : null,
+    };
+  }
+
+  const targetDate = parseDateOnlyUtc(todayStr);
+
+  return db.$transaction(async (tx) => {
+    const now = new Date();
+    const updated = await tx.appointment.updateMany({
+      where: {
+        id: appointment.id,
+        status: "CONFIRMED",
+        appointmentDate: targetDate,
+        checkedInAt: null,
+      },
+      data: {
+        checkedInAt: now,
+        checkedInByUserId: staffUserId,
+      },
+    });
+
+    if (updated.count === 0) {
+      const fresh = await tx.appointment.findUnique({
+        where: { id: appointment.id },
+        select: { checkedInAt: true, queueNumber: true },
+      });
+      if (fresh?.checkedInAt) {
+        return {
+          alreadyCheckedIn: true,
+          checkedInAt: fresh.checkedInAt,
+          queueNumber: fresh.queueNumber,
+          formattedQueueNumber:
+            fresh.queueNumber !== null ? formatQueueNumber(fresh.queueNumber) : null,
+        };
+      }
+      throw new InvalidAppointmentStateError("Janji temu tidak dapat di-check-in saat ini.");
+    }
+
+    await tx.appointmentHistory.create({
+      data: {
+        appointmentId: appointment.id,
+        status: "CONFIRMED",
+        notes: `Check-in berhasil oleh staf pendaftaran (metode: ${input.method === "QR" ? "QR Code" : "Manual"}).`,
+        changedByUserId: staffUserId,
+      },
+    });
+
+    return {
+      alreadyCheckedIn: false,
+      checkedInAt: now,
+      queueNumber: appointment.queueNumber,
+      formattedQueueNumber:
+        appointment.queueNumber !== null ? formatQueueNumber(appointment.queueNumber) : null,
+    };
+  });
 }

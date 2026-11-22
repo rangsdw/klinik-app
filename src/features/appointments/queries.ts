@@ -3,7 +3,7 @@ import type { AppointmentStatus } from "@prisma/client";
 import { db } from "@/lib/db";
 import { dayOfWeekFromDateStr, jakartaTodayStr, parseDateOnlyUtc, toDateInput } from "@/lib/date";
 import { activePatientWhere } from "@/features/patients/queries";
-import { ACTIVE_QUOTA_STATUSES, DATE_REGEX } from "@/features/appointments/schemas";
+import { ACTIVE_QUOTA_STATUSES, DATE_REGEX, formatQueueNumber } from "@/features/appointments/schemas";
 import { getQuotaStatus } from "@/features/appointments/service";
 
 export type DoctorOption = {
@@ -326,5 +326,77 @@ export async function getStaffAppointmentRequestsData(
       todayTotalCount,
     },
     requests,
+  };
+}
+
+export type CheckInDashboardStats = {
+  checkedInTodayCount: number;
+  pendingCheckInTodayCount: number;
+};
+
+export type RecentCheckInRow = {
+  id: string;
+  patientName: string;
+  medicalRecordNumber: string;
+  doctorName: string;
+  queueNumber: number | null;
+  formattedQueueNumber: string | null;
+  checkedInAt: Date;
+};
+
+/** Statistik dan daftar check-in terbaru hari ini untuk halaman staf pendaftaran. */
+export async function getCheckInDashboardData(
+  todayStr: string = jakartaTodayStr(),
+): Promise<{ stats: CheckInDashboardStats; recentCheckIns: RecentCheckInRow[] }> {
+  const todayDate = parseDateOnlyUtc(todayStr);
+
+  const [checkedInTodayCount, pendingCheckInTodayCount, recentRows] = await Promise.all([
+    db.appointment.count({
+      where: {
+        appointmentDate: todayDate,
+        checkedInAt: { not: null },
+        patient: activePatientWhere(),
+      },
+    }),
+    db.appointment.count({
+      where: {
+        appointmentDate: todayDate,
+        status: "CONFIRMED",
+        checkedInAt: null,
+        patient: activePatientWhere(),
+      },
+    }),
+    db.appointment.findMany({
+      where: {
+        appointmentDate: todayDate,
+        checkedInAt: { not: null },
+        patient: activePatientWhere(),
+      },
+      select: {
+        id: true,
+        queueNumber: true,
+        checkedInAt: true,
+        patient: { select: { name: true, medicalRecordNumber: true } },
+        doctor: { select: { name: true } },
+      },
+      orderBy: { checkedInAt: "desc" },
+      take: 15,
+    }),
+  ]);
+
+  return {
+    stats: {
+      checkedInTodayCount,
+      pendingCheckInTodayCount,
+    },
+    recentCheckIns: recentRows.map((r) => ({
+      id: r.id,
+      patientName: r.patient.name,
+      medicalRecordNumber: r.patient.medicalRecordNumber,
+      doctorName: r.doctor.name,
+      queueNumber: r.queueNumber,
+      formattedQueueNumber: r.queueNumber !== null ? formatQueueNumber(r.queueNumber) : null,
+      checkedInAt: r.checkedInAt!,
+    })),
   };
 }

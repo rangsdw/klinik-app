@@ -135,3 +135,18 @@ export const rescheduleAppointmentSchema = z.object({
 
 export type RescheduleAppointmentInput = z.infer<typeof rescheduleAppointmentSchema>;
 
+export const checkInLookupSchema = z.object({
+  query: z
+    .string()
+    .trim()
+    .min(1, "Masukkan hasil pindai QR, No. RM, atau nama pasien")
+    .max(160, "Kata kunci terlalu panjang"),
+});
+
+export const performCheckInSchema = z.object({
+  appointmentId: z.string().trim().min(1, "Pilih janji temu untuk check-in"),
+  method: z.enum(["QR", "MANUAL"]),
+});
+
+export type PerformCheckInInput = z.infer<typeof performCheckInSchema>;
+

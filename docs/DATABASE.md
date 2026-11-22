@@ -111,7 +111,11 @@ Menyimpan jadwal dan sesi pemeriksaan antara pasien dengan dokter.
 | rejection_reason | text | nullable; alasan penolakan janji oleh staf pendaftaran |
 | rescheduled_at | datetime | nullable; waktu terakhir janji dijadwalkan ulang oleh staf |
 | reschedule_note | text | nullable; alasan penjadwalan ulang dari staf pendaftaran |
+| checked_in_at | datetime | nullable; waktu check-in kedatangan pasien oleh staf pendaftaran |
+| checked_in_by_user_id | varchar | nullable; ID staf pendaftaran yang melakukan check-in |
 | created_at, updated_at | datetime | |
+
+Index tambahan: `(doctor_id, appointment_date, status)`.
 
 ### `appointment_histories` (AppointmentHistory)
 Log riwayat status appointment.
