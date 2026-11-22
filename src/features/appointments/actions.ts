@@ -5,15 +5,31 @@ import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireRole, requireStaffType } from "@/lib/rbac";
 import { firstErrors, type ActionResult } from "@/lib/action-result";
+import { checkInScanLimiter } from "@/lib/rate-limit";
+import { parsePatientQr, QR_PREFIX } from "@/features/patients/qr";
+import { renderPatientQrSvg } from "@/features/patients/qr-render";
+import {
+  findPatientByQrTokenForStaff,
+  searchPatientsForStaff,
+  type StaffPatientSummary,
+} from "@/features/patients/staff-queries";
 import {
   bookAppointmentSchema,
+  callNextQueueSchema,
+  checkInLookupSchema,
   doctorScheduleSchema,
+  markNoShowSchema,
+  performCheckInSchema,
+  recallQueueSchema,
   rejectAppointmentSchema,
   rescheduleAppointmentSchema,
+  walkInRegistrationSchema,
   type BookAppointmentInput,
   type DoctorScheduleInput,
+  type PerformCheckInInput,
   type RejectAppointmentInput,
   type RescheduleAppointmentInput,
+  type WalkInRegistrationInput,
 } from "@/features/appointments/schemas";
 import {
   getAvailableSessionsForDate,
@@ -23,16 +39,25 @@ import {
   approveAppointmentByStaff,
   assertValidScheduleSlot,
   bookAppointmentForPatient,
+  callNextQueueByStaff,
   cancelPatientAppointment,
   DuplicateAppointmentError,
+  DuplicatePatientError,
   InvalidAppointmentStateError,
   InvalidBookingDateError,
+  lookupPatientCheckInToday,
+  markAppointmentNoShowByStaff,
   PatientNotOwnedError,
+  performAppointmentCheckIn,
   QuotaFullError,
+  recallQueueByStaff,
+  registerWalkInAppointment,
   rejectAppointmentByStaff,
   rescheduleAppointmentByStaff,
   ScheduleOverlapError,
   validateBookingDate,
+  type CheckInLookupResult,
+  type WalkInRegistrationResult,
 } from "@/features/appointments/service";
 
 async function ensureActiveDoctor(doctorId: string): Promise<boolean> {
@@ -78,7 +103,10 @@ export async function createScheduleAction(
     if (error instanceof ScheduleOverlapError) {
       return { ok: false, fieldErrors: { startTime: error.message } };
     }
-    return { ok: false, message: error instanceof Error ? error.message : "Data jadwal tidak valid." };
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Data jadwal tidak valid.",
+    };
   }
 
   const created = await db.doctorSchedule.create({
@@ -94,7 +122,11 @@ export async function createScheduleAction(
   });
 
   revalidateSchedulePages();
-  return { ok: true, message: "Sesi jadwal dokter berhasil ditambahkan.", data: { id: created.id } };
+  return {
+    ok: true,
+    message: "Sesi jadwal dokter berhasil ditambahkan.",
+    data: { id: created.id },
+  };
 }
 
 export async function updateScheduleAction(
@@ -137,7 +169,10 @@ export async function updateScheduleAction(
       if (error instanceof ScheduleOverlapError) {
         return { ok: false, fieldErrors: { startTime: error.message } };
       }
-      return { ok: false, message: error instanceof Error ? error.message : "Data jadwal tidak valid." };
+      return {
+        ok: false,
+        message: error instanceof Error ? error.message : "Data jadwal tidak valid.",
+      };
     }
   }
 
@@ -216,8 +251,10 @@ export async function toggleScheduleStatusAction(
 
 function revalidateAppointmentPages() {
   revalidatePath("/pasien/janji");
+  revalidatePath("/pasien/antrean");
   revalidatePath("/pasien");
   revalidatePath("/staf/pendaftaran");
+  revalidatePath("/staf/pendaftaran/antrean");
   revalidatePath("/dokter");
 }
 
@@ -397,6 +434,285 @@ export async function rescheduleAppointmentAction(
       error instanceof InvalidBookingDateError ||
       error instanceof InvalidAppointmentStateError
     ) {
+      return { ok: false, message: error.message };
+    }
+    throw error;
+  }
+}
+
+export type CheckInLookupActionData =
+  | { mode: "detail"; detail: CheckInLookupResult }
+  | { mode: "candidates"; candidates: StaffPatientSummary[] };
+
+export async function lookupCheckInAction(
+  rawInput: string,
+): Promise<ActionResult<CheckInLookupActionData>> {
+  const staff = await requireStaffType("REGISTRATION");
+
+  const limit = await checkInScanLimiter.hit(`checkin:${staff.id}`);
+  if (!limit.ok) {
+    return {
+      ok: false,
+      message: `Terlalu banyak percobaan pindai/cari. Coba lagi dalam ${limit.retryAfterSeconds} detik.`,
+    };
+  }
+
+  const parsed = checkInLookupSchema.safeParse({ query: rawInput });
+  if (!parsed.success) {
+    return { ok: false, message: "Masukkan hasil pindai QR, No. RM, atau nama pasien." };
+  }
+
+  const query = parsed.data.query;
+  if (query.toUpperCase().startsWith(QR_PREFIX)) {
+    const token = parsePatientQr(
+      query.startsWith(QR_PREFIX) ? query : `${QR_PREFIX}${query.slice(QR_PREFIX.length)}`,
+    );
+    if (!token) {
+      return { ok: false, message: "Kode QR tidak valid atau pasien tidak ditemukan." };
+    }
+    const patient = await findPatientByQrTokenForStaff(token);
+    if (!patient) {
+      return { ok: false, message: "Kode QR tidak valid atau pasien tidak ditemukan." };
+    }
+    const detail = await lookupPatientCheckInToday(patient.id, "QR");
+    if (!detail) {
+      return { ok: false, message: "Kode QR tidak valid atau pasien tidak ditemukan." };
+    }
+    return { ok: true, data: { mode: "detail", detail } };
+  }
+
+  const candidates = await searchPatientsForStaff(query);
+  if (candidates.length === 0) {
+    return { ok: false, message: "Pasien tidak ditemukan." };
+  }
+
+  const exactMrn = candidates.find(
+    (c) => c.medicalRecordNumber.toLowerCase() === query.toLowerCase(),
+  );
+  if (candidates.length === 1 || exactMrn) {
+    const target = exactMrn ?? candidates[0]!;
+    const detail = await lookupPatientCheckInToday(target.id, "MANUAL");
+    if (!detail) {
+      return { ok: false, message: "Pasien tidak ditemukan." };
+    }
+    return { ok: true, data: { mode: "detail", detail } };
+  }
+
+  return { ok: true, data: { mode: "candidates", candidates } };
+}
+
+export async function selectCheckInPatientAction(
+  patientId: string,
+): Promise<ActionResult<CheckInLookupResult>> {
+  await requireStaffType("REGISTRATION");
+  const detail = await lookupPatientCheckInToday(patientId, "MANUAL");
+  if (!detail) {
+    return { ok: false, message: "Pasien tidak ditemukan." };
+  }
+  return { ok: true, data: detail };
+}
+
+export async function performCheckInAction(input: PerformCheckInInput): Promise<
+  ActionResult<{
+    alreadyCheckedIn: boolean;
+    checkedInAt: string;
+    formattedQueueNumber: string | null;
+  }>
+> {
+  const staff = await requireStaffType("REGISTRATION");
+
+  const parsed = performCheckInSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, message: "Data check-in tidak valid." };
+  }
+
+  try {
+    const res = await performAppointmentCheckIn(staff.id, parsed.data);
+    revalidateAppointmentPages();
+    revalidatePath("/staf/pendaftaran/check-in");
+    revalidatePath("/pasien/antrean");
+
+    const queueLabel = res.formattedQueueNumber ? ` (${res.formattedQueueNumber})` : "";
+    return {
+      ok: true,
+      message: res.alreadyCheckedIn
+        ? `Pasien sudah check-in sebelumnya${queueLabel}.`
+        : `Check-in berhasil${queueLabel}.`,
+      data: {
+        alreadyCheckedIn: res.alreadyCheckedIn,
+        checkedInAt: res.checkedInAt.toISOString(),
+        formattedQueueNumber: res.formattedQueueNumber,
+      },
+    };
+  } catch (error) {
+    if (error instanceof InvalidAppointmentStateError) {
+      return { ok: false, message: error.message };
+    }
+    throw error;
+  }
+}
+
+export async function searchWalkInPatientsAction(
+  query: string,
+): Promise<ActionResult<StaffPatientSummary[]>> {
+  await requireStaffType("REGISTRATION");
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return { ok: true, data: [] };
+  }
+  const results = await searchPatientsForStaff(trimmed, 10);
+  return { ok: true, data: results };
+}
+
+export type WalkInActionSuccess = Omit<WalkInRegistrationResult, "newPatientQrToken"> & {
+  newPatientQrSvg: string | null;
+};
+
+export type WalkInActionResult =
+  | { ok: true; message?: string; data: WalkInActionSuccess }
+  | {
+      ok: false;
+      message?: string;
+      fieldErrors?: Record<string, string>;
+      duplicatePatient?: StaffPatientSummary;
+    };
+
+export async function registerWalkInAction(
+  input: WalkInRegistrationInput,
+): Promise<WalkInActionResult> {
+  const staff = await requireStaffType("REGISTRATION");
+
+  const parsed = walkInRegistrationSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, fieldErrors: firstErrors(parsed.error.flatten().fieldErrors) };
+  }
+
+  try {
+    const res = await registerWalkInAppointment(staff.id, parsed.data);
+    const newPatientQrSvg =
+      res.isNewPatient && res.newPatientQrToken
+        ? await renderPatientQrSvg(res.newPatientQrToken)
+        : null;
+
+    revalidateAppointmentPages();
+    revalidatePath("/staf/pendaftaran/walk-in");
+    revalidatePath("/staf/pendaftaran/check-in");
+    revalidatePath("/pasien/antrean");
+
+    const { newPatientQrToken: _ignored, ...safeData } = res;
+    void _ignored;
+
+    return {
+      ok: true,
+      message: `Walk-in berhasil didaftarkan. Nomor antrean: ${res.formattedQueueNumber}.`,
+      data: {
+        ...safeData,
+        newPatientQrSvg,
+      },
+    };
+  } catch (error) {
+    if (error instanceof DuplicatePatientError) {
+      return {
+        ok: false,
+        message: error.message,
+        duplicatePatient: error.existingPatient,
+      };
+    }
+    if (
+      error instanceof DuplicateAppointmentError ||
+      error instanceof InvalidBookingDateError ||
+      error instanceof InvalidAppointmentStateError
+    ) {
+      return { ok: false, message: error.message };
+    }
+    throw error;
+  }
+}
+
+export async function callNextQueueAction(
+  doctorId: string,
+): Promise<
+  ActionResult<{ appointmentId: string; formattedQueueNumber: string; patientName: string }>
+> {
+  const staff = await requireStaffType("REGISTRATION");
+
+  const parsed = callNextQueueSchema.safeParse({ doctorId });
+  if (!parsed.success) {
+    return { ok: false, message: "Dokter wajib dipilih." };
+  }
+
+  try {
+    const res = await callNextQueueByStaff(staff.id, parsed.data.doctorId);
+    revalidatePath("/staf/pendaftaran/antrean");
+    revalidatePath("/pasien/antrean");
+    revalidatePath("/dokter");
+    return {
+      ok: true,
+      message: `Memanggil antrean ${res.formattedQueueNumber} (${res.patientName}).`,
+      data: {
+        appointmentId: res.appointmentId,
+        formattedQueueNumber: res.formattedQueueNumber,
+        patientName: res.patientName,
+      },
+    };
+  } catch (error) {
+    if (error instanceof InvalidAppointmentStateError) {
+      return { ok: false, message: error.message };
+    }
+    throw error;
+  }
+}
+
+export async function recallQueueAction(
+  appointmentId: string,
+): Promise<ActionResult<{ appointmentId: string; formattedQueueNumber: string | null }>> {
+  const staff = await requireStaffType("REGISTRATION");
+
+  const parsed = recallQueueSchema.safeParse({ appointmentId });
+  if (!parsed.success) {
+    return { ok: false, message: "Data antrean tidak valid." };
+  }
+
+  try {
+    const res = await recallQueueByStaff(staff.id, parsed.data.appointmentId);
+    revalidatePath("/staf/pendaftaran/antrean");
+    revalidatePath("/pasien/antrean");
+    revalidatePath("/dokter");
+    const queueLabel = res.formattedQueueNumber ? ` ${res.formattedQueueNumber}` : "";
+    return {
+      ok: true,
+      message: `Memanggil ulang antrean${queueLabel} (${res.patientName}).`,
+      data: {
+        appointmentId: res.appointmentId,
+        formattedQueueNumber: res.formattedQueueNumber,
+      },
+    };
+  } catch (error) {
+    if (error instanceof InvalidAppointmentStateError) {
+      return { ok: false, message: error.message };
+    }
+    throw error;
+  }
+}
+
+export async function markNoShowAction(appointmentId: string): Promise<ActionResult> {
+  const staff = await requireStaffType("REGISTRATION");
+
+  const parsed = markNoShowSchema.safeParse({ appointmentId });
+  if (!parsed.success) {
+    return { ok: false, message: "Data antrean tidak valid." };
+  }
+
+  try {
+    const res = await markAppointmentNoShowByStaff(staff.id, parsed.data.appointmentId);
+    revalidateAppointmentPages();
+    const queueLabel = res.formattedQueueNumber ? ` ${res.formattedQueueNumber}` : "";
+    return {
+      ok: true,
+      message: `Antrean${queueLabel} (${res.patientName}) ditandai tidak hadir.`,
+    };
+  } catch (error) {
+    if (error instanceof InvalidAppointmentStateError) {
       return { ok: false, message: error.message };
     }
     throw error;

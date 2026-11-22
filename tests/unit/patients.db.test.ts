@@ -3,10 +3,17 @@ import { db } from "@/lib/db";
 import { formatMedicalRecordNumber, generateMedicalRecordNumber } from "@/features/patients/mrn";
 import {
   addFamilyMember,
+  createPatient,
   FamilyLimitError,
+  PatientNotOwnedError,
+  regeneratePatientQrToken,
   registerPatientAccount,
 } from "@/features/patients/service";
-import { getOwnedPatient, listPatientsForAccount } from "@/features/patients/queries";
+import {
+  countPatientsForAccount,
+  getOwnedPatient,
+  listPatientsForAccount,
+} from "@/features/patients/queries";
 import { MAX_FAMILY_MEMBERS } from "@/config/clinic";
 
 /** Integrasi ke database test terpisah (klinik_app_test), dibersihkan tiap test. */
@@ -114,5 +121,79 @@ describe("kepemilikan pasien", () => {
         gender: "MALE",
       }),
     ).rejects.toBeInstanceOf(FamilyLimitError);
+  });
+});
+
+describe("QR Code pasien", () => {
+  it("pemilik akun dan anggota keluarga memiliki qrToken terpisah", async () => {
+    const akun = await newAccount();
+    const child = await addFamilyMember(akun.user.id, {
+      name: "anak qr",
+      relationship: "CHILD",
+      birthDate: "2020-05-05",
+      gender: "FEMALE",
+    });
+
+    const [selfRow, childRow] = await Promise.all([
+      db.patient.findUniqueOrThrow({ where: { id: akun.patient.id }, select: { qrToken: true } }),
+      db.patient.findUniqueOrThrow({ where: { id: child.id }, select: { qrToken: true } }),
+    ]);
+
+    expect(selfRow.qrToken).toHaveLength(36);
+    expect(childRow.qrToken).toHaveLength(36);
+    expect(childRow.qrToken).not.toBe(selfRow.qrToken);
+  });
+
+  it("regeneratePatientQrToken mengganti token dan menolak akses akun lain atau pasien terhapus", async () => {
+    const akunA = await newAccount();
+    const akunB = await newAccount();
+    const { qrToken: oldToken } = await db.patient.findUniqueOrThrow({
+      where: { id: akunA.patient.id },
+      select: { qrToken: true },
+    });
+
+    const updated = await regeneratePatientQrToken(akunA.user.id, akunA.patient.id);
+    expect(updated.qrToken).toHaveLength(36);
+    expect(updated.qrToken).not.toBe(oldToken);
+
+    const row = await db.patient.findUniqueOrThrow({ where: { id: akunA.patient.id } });
+    expect(row.qrToken).toBe(updated.qrToken);
+
+    // Akun B tidak boleh mengganti QR milik Akun A
+    await expect(regeneratePatientQrToken(akunB.user.id, akunA.patient.id)).rejects.toBeInstanceOf(
+      PatientNotOwnedError,
+    );
+
+    // Pasien soft-delete tidak bisa dibuatkan QR baru
+    const child = await addFamilyMember(akunA.user.id, {
+      name: "anak hapus",
+      relationship: "CHILD",
+      birthDate: "2021-01-01",
+      gender: "MALE",
+    });
+    await db.patient.update({ where: { id: child.id }, data: { deletedAt: new Date() } });
+    await expect(regeneratePatientQrToken(akunA.user.id, child.id)).rejects.toBeInstanceOf(
+      PatientNotOwnedError,
+    );
+  });
+
+  it("regresi: pasien walk-in (accountUserId null) tidak muncul di portal maupun hitungan akun", async () => {
+    const akun = await newAccount();
+    const walkInPatient = await db.$transaction((tx) =>
+      createPatient(tx, {
+        accountUserId: null,
+        name: "Pasien Walkin Tanpa Akun",
+        birthDate: new Date("1994-01-10T00:00:00.000Z"),
+        gender: "MALE",
+        relationship: "OTHER",
+        isSelf: false,
+      }),
+    );
+
+    expect(await listPatientsForAccount(akun.user.id)).toHaveLength(1);
+    expect(await countPatientsForAccount(akun.user.id)).toBe(1);
+    expect(await getOwnedPatient(akun.user.id, walkInPatient.id)).toBeNull();
+    expect(await listPatientsForAccount("")).toEqual([]);
+    expect(await getOwnedPatient("", walkInPatient.id)).toBeNull();
   });
 });

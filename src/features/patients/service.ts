@@ -13,7 +13,7 @@ import {
   normalizeText,
 } from "@/lib/normalize";
 import { MAX_FAMILY_MEMBERS } from "@/config/clinic";
-import { activePatientWhere } from "@/features/patients/queries";
+import { activePatientWhere, getOwnedPatient } from "@/features/patients/queries";
 import type { FamilyMemberInput } from "@/features/patients/schemas";
 import type { RegisterInput } from "@/features/auth/schemas";
 
@@ -22,7 +22,8 @@ export const BCRYPT_COST = 12;
 export { formatMedicalRecordNumber, generateMedicalRecordNumber } from "@/features/patients/mrn";
 
 export type CreatePatientData = {
-  accountUserId: string;
+  accountUserId?: string | null;
+  createdByUserId?: string | null;
   name: string;
   birthDate: Date;
   gender: Gender;
@@ -42,11 +43,13 @@ export async function createPatient(tx: Tx, data: CreatePatientData) {
   return tx.patient.create({
     data: {
       ...data,
+      accountUserId: data.accountUserId ?? null,
+      createdByUserId: data.createdByUserId ?? null,
       isSelf: data.isSelf ?? false,
       medicalRecordNumber,
       qrToken: randomUUID(),
     },
-    select: { id: true, medicalRecordNumber: true, name: true },
+    select: { id: true, medicalRecordNumber: true, name: true, qrToken: true },
   });
 }
 
@@ -131,4 +134,28 @@ export function uniqueFieldFromError(error: unknown): string | null {
   if (t.includes("phone")) return "phone";
   if (t.includes("nik")) return "nik";
   return "unknown";
+}
+
+export class PatientNotOwnedError extends Error {
+  constructor(message = "Pasien tidak ditemukan.") {
+    super(message);
+    this.name = "PatientNotOwnedError";
+  }
+}
+
+/**
+ * Terbitkan token QR baru untuk pasien milik akun yang login.
+ * Token lama langsung tidak berlaku di database.
+ */
+export async function regeneratePatientQrToken(accountUserId: string, patientId: string) {
+  const owned = await getOwnedPatient(accountUserId, patientId);
+  if (!owned) {
+    throw new PatientNotOwnedError();
+  }
+
+  return db.patient.update({
+    where: { id: owned.id },
+    data: { qrToken: randomUUID() },
+    select: { id: true, qrToken: true },
+  });
 }

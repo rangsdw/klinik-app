@@ -53,3 +53,13 @@ export function addDaysToDateStr(dateStr: string, days: number): string {
 export function dayOfWeekFromDateStr(dateStr: string): number {
   return parseDateOnlyUtc(dateStr).getUTCDay();
 }
+
+/** Jam saat ini dalam zona waktu Asia/Jakarta ("HH:mm"). */
+export function jakartaCurrentTimeStr(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Jakarta",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(now);
+}

@@ -1,22 +1,31 @@
 import "server-only";
-import type { Prisma } from "@prisma/client";
+import type { AppointmentStatus, Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
   addDaysToDateStr,
+  ageLabel,
   dayOfWeekFromDateStr,
+  jakartaCurrentTimeStr,
   jakartaTodayStr,
   parseDateOnlyUtc,
   toDateInput,
 } from "@/lib/date";
-import { getOwnedPatient } from "@/features/patients/queries";
+import { activePatientWhere, getOwnedPatient } from "@/features/patients/queries";
+import { createPatient, normalizeMemberInput } from "@/features/patients/service";
+import {
+  findPatientByIdForStaff,
+  type StaffPatientSummary,
+} from "@/features/patients/staff-queries";
 import {
   ACTIVE_QUOTA_STATUSES,
   DATE_REGEX,
   formatQueueNumber,
   MAX_BOOKING_DAYS_AHEAD,
   type BookAppointmentInput,
+  type PerformCheckInInput,
   type RejectAppointmentInput,
   type RescheduleAppointmentInput,
+  type WalkInRegistrationInput,
 } from "@/features/appointments/schemas";
 
 export type TimeSlot = {
@@ -26,7 +35,9 @@ export type TimeSlot = {
 };
 
 export class ScheduleOverlapError extends Error {
-  constructor(message = "Sesi tumpang tindih dengan jadwal aktif lain pada dokter dan hari yang sama.") {
+  constructor(
+    message = "Sesi tumpang tindih dengan jadwal aktif lain pada dokter dan hari yang sama.",
+  ) {
     super(message);
     this.name = "ScheduleOverlapError";
   }
@@ -64,6 +75,18 @@ export class InvalidAppointmentStateError extends Error {
   constructor(message = "Status janji tidak dapat diubah.") {
     super(message);
     this.name = "InvalidAppointmentStateError";
+  }
+}
+
+export class DuplicatePatientError extends Error {
+  readonly existingPatient: StaffPatientSummary;
+
+  constructor(existingPatient: StaffPatientSummary) {
+    super(
+      `Pasien sudah terdaftar dengan nama ${existingPatient.name} (${existingPatient.medicalRecordNumber}).`,
+    );
+    this.name = "DuplicatePatientError";
+    this.existingPatient = existingPatient;
   }
 }
 
@@ -223,6 +246,7 @@ export async function bookAppointmentForPatient(
       where: {
         doctorId: schedule.doctorId,
         appointmentDate: targetDate,
+        source: "ONLINE",
         status: { in: [...ACTIVE_QUOTA_STATUSES] },
         OR: [
           { scheduleId: schedule.id },
@@ -318,7 +342,9 @@ export async function nextQueueNumber(
 ): Promise<number> {
   const key = queueCounterKey(doctorId, dateStr);
   await tx.$executeRaw`INSERT INTO counters (\`key\`, value) VALUES (${key}, 1) ON DUPLICATE KEY UPDATE value = value + 1`;
-  const rows = await tx.$queryRaw<{ value: number }[]>`SELECT value FROM counters WHERE \`key\` = ${key}`;
+  const rows = await tx.$queryRaw<
+    { value: number }[]
+  >`SELECT value FROM counters WHERE \`key\` = ${key}`;
   const value = Number(rows[0]?.value);
   if (!Number.isFinite(value) || value < 1) {
     throw new Error("Gagal membuat nomor antrean.");
@@ -415,10 +441,7 @@ export async function approveAppointmentByStaff(staffUserId: string, appointment
 }
 
 /** Tolak janji PENDING dengan alasan wajib dan kembalikan kuota sesi. */
-export async function rejectAppointmentByStaff(
-  staffUserId: string,
-  input: RejectAppointmentInput,
-) {
+export async function rejectAppointmentByStaff(staffUserId: string, input: RejectAppointmentInput) {
   const reason = input.reason.trim();
   if (reason.length < 5) {
     throw new InvalidAppointmentStateError("Alasan penolakan minimal 5 karakter.");
@@ -439,9 +462,7 @@ export async function rejectAppointmentByStaff(
       throw new InvalidAppointmentStateError("Janji temu tidak ditemukan.");
     }
     if (appointment.status !== "PENDING") {
-      throw new InvalidAppointmentStateError(
-        "Janji temu sudah diproses dan tidak dapat ditolak.",
-      );
+      throw new InvalidAppointmentStateError("Janji temu sudah diproses dan tidak dapat ditolak.");
     }
 
     const updated = await tx.appointment.update({
@@ -552,7 +573,9 @@ export async function rescheduleAppointmentByStaff(
           appointment.startTime === targetSchedule.startTime &&
           appointment.endTime === targetSchedule.endTime));
     if (sameSession) {
-      throw new InvalidBookingDateError("Pilih tanggal atau sesi yang berbeda dari jadwal saat ini.");
+      throw new InvalidBookingDateError(
+        "Pilih tanggal atau sesi yang berbeda dari jadwal saat ini.",
+      );
     }
 
     const duplicate = await tx.appointment.findFirst({
@@ -576,6 +599,7 @@ export async function rescheduleAppointmentByStaff(
         id: { not: appointment.id },
         doctorId: targetSchedule.doctorId,
         appointmentDate: targetDate,
+        source: "ONLINE",
         status: { in: [...ACTIVE_QUOTA_STATUSES] },
         OR: [
           { scheduleId: targetSchedule.id },
@@ -588,7 +612,7 @@ export async function rescheduleAppointmentByStaff(
       },
     });
 
-    if (usedCount >= targetSchedule.quota) {
+    if (appointment.source === "ONLINE" && usedCount >= targetSchedule.quota) {
       throw new QuotaFullError("Kuota sesi tujuan sudah penuh.");
     }
 
@@ -651,4 +675,608 @@ export async function rescheduleAppointmentByStaff(
     queueNumber: result.queueNumber,
     formattedQueueNumber: result.formattedQueueNumber,
   };
+}
+
+export type CheckInAppointmentItem = {
+  id: string;
+  doctorId: string;
+  doctorName: string;
+  startTime: string;
+  endTime: string;
+  queueNumber: number | null;
+  formattedQueueNumber: string | null;
+  status: AppointmentStatus;
+  checkedInAt: Date | null;
+};
+
+export type CheckInLookupResult = {
+  patient: StaffPatientSummary;
+  method: "QR" | "MANUAL";
+  eligibleConfirmed: CheckInAppointmentItem[];
+  alreadyCheckedIn: CheckInAppointmentItem[];
+  pendingAppointments: CheckInAppointmentItem[];
+};
+
+/**
+ * Ambil daftar janji pasien hari ini untuk layar check-in staf.
+ * Hanya mengembalikan data minimum pasien (tanpa alergi/kondisi medis).
+ */
+export async function lookupPatientCheckInToday(
+  patientId: string,
+  method: "QR" | "MANUAL",
+  todayStr: string = jakartaTodayStr(),
+): Promise<CheckInLookupResult | null> {
+  const patient = await findPatientByIdForStaff(patientId);
+  if (!patient) return null;
+
+  const rows = await db.appointment.findMany({
+    where: {
+      patientId: patient.id,
+      appointmentDate: parseDateOnlyUtc(todayStr),
+      status: { in: ["PENDING", "CONFIRMED", "IN_PROGRESS", "COMPLETED"] },
+    },
+    include: {
+      doctor: { select: { name: true } },
+    },
+    orderBy: [{ startTime: "asc" }, { createdAt: "asc" }],
+  });
+
+  const mapped: CheckInAppointmentItem[] = rows.map((r) => ({
+    id: r.id,
+    doctorId: r.doctorId,
+    doctorName: r.doctor.name,
+    startTime: r.startTime,
+    endTime: r.endTime,
+    queueNumber: r.queueNumber,
+    formattedQueueNumber: r.queueNumber !== null ? formatQueueNumber(r.queueNumber) : null,
+    status: r.status,
+    checkedInAt: r.checkedInAt,
+  }));
+
+  return {
+    patient,
+    method,
+    eligibleConfirmed: mapped.filter((a) => a.status === "CONFIRMED" && a.checkedInAt === null),
+    alreadyCheckedIn: mapped.filter((a) => a.checkedInAt !== null),
+    pendingAppointments: mapped.filter((a) => a.status === "PENDING"),
+  };
+}
+
+/**
+ * Catat kedatangan (check-in) untuk janji CONFIRMED hari ini.
+ * Idempoten dan aman dari klik ganda / dua staf bersamaan (update bersyarat checkedInAt IS NULL).
+ */
+export async function performAppointmentCheckIn(
+  staffUserId: string,
+  input: PerformCheckInInput,
+  todayStr: string = jakartaTodayStr(),
+): Promise<{
+  alreadyCheckedIn: boolean;
+  checkedInAt: Date;
+  queueNumber: number | null;
+  formattedQueueNumber: string | null;
+}> {
+  const appointment = await db.appointment.findUnique({
+    where: { id: input.appointmentId },
+    select: {
+      id: true,
+      appointmentDate: true,
+      status: true,
+      checkedInAt: true,
+      queueNumber: true,
+    },
+  });
+
+  if (!appointment) {
+    throw new InvalidAppointmentStateError("Janji temu tidak ditemukan.");
+  }
+
+  if (toDateInput(appointment.appointmentDate) !== todayStr) {
+    throw new InvalidAppointmentStateError("Hanya janji temu hari ini yang dapat di-check-in.");
+  }
+
+  if (appointment.status === "PENDING") {
+    throw new InvalidAppointmentStateError("Janji belum disetujui.");
+  }
+
+  if (appointment.status !== "CONFIRMED") {
+    throw new InvalidAppointmentStateError("Status janji temu ini tidak dapat di-check-in.");
+  }
+
+  if (appointment.checkedInAt !== null) {
+    return {
+      alreadyCheckedIn: true,
+      checkedInAt: appointment.checkedInAt,
+      queueNumber: appointment.queueNumber,
+      formattedQueueNumber:
+        appointment.queueNumber !== null ? formatQueueNumber(appointment.queueNumber) : null,
+    };
+  }
+
+  const targetDate = parseDateOnlyUtc(todayStr);
+
+  return db.$transaction(async (tx) => {
+    const now = new Date();
+    const updated = await tx.appointment.updateMany({
+      where: {
+        id: appointment.id,
+        status: "CONFIRMED",
+        appointmentDate: targetDate,
+        checkedInAt: null,
+      },
+      data: {
+        checkedInAt: now,
+        checkedInByUserId: staffUserId,
+      },
+    });
+
+    if (updated.count === 0) {
+      const fresh = await tx.appointment.findUnique({
+        where: { id: appointment.id },
+        select: { checkedInAt: true, queueNumber: true },
+      });
+      if (fresh?.checkedInAt) {
+        return {
+          alreadyCheckedIn: true,
+          checkedInAt: fresh.checkedInAt,
+          queueNumber: fresh.queueNumber,
+          formattedQueueNumber:
+            fresh.queueNumber !== null ? formatQueueNumber(fresh.queueNumber) : null,
+        };
+      }
+      throw new InvalidAppointmentStateError("Janji temu tidak dapat di-check-in saat ini.");
+    }
+
+    await tx.appointmentHistory.create({
+      data: {
+        appointmentId: appointment.id,
+        status: "CONFIRMED",
+        notes: `Check-in berhasil oleh staf pendaftaran (metode: ${input.method === "QR" ? "QR Code" : "Manual"}).`,
+        changedByUserId: staffUserId,
+      },
+    });
+
+    return {
+      alreadyCheckedIn: false,
+      checkedInAt: now,
+      queueNumber: appointment.queueNumber,
+      formattedQueueNumber:
+        appointment.queueNumber !== null ? formatQueueNumber(appointment.queueNumber) : null,
+    };
+  });
+}
+
+export type WalkInRegistrationResult = {
+  appointmentId: string;
+  patientId: string;
+  patientName: string;
+  medicalRecordNumber: string;
+  doctorName: string;
+  appointmentDate: string;
+  startTime: string;
+  endTime: string;
+  queueNumber: number;
+  formattedQueueNumber: string;
+  isNewPatient: boolean;
+  newPatientQrToken: string | null;
+};
+
+/**
+ * Daftarkan pasien walk-in (pasien lama atau pasien baru tanpa akun portal) dalam satu transaksi.
+ * Walk-in tidak mengurangi kuota booking online dan langsung mendapatkan status CONFIRMED + checkedInAt.
+ */
+export async function registerWalkInAppointment(
+  staffUserId: string,
+  input: WalkInRegistrationInput,
+  todayStr: string = jakartaTodayStr(),
+  currentTimeStr: string = jakartaCurrentTimeStr(),
+): Promise<WalkInRegistrationResult> {
+  const targetDate = parseDateOnlyUtc(todayStr);
+  const expectedDay = dayOfWeekFromDateStr(todayStr);
+
+  return db.$transaction(async (tx) => {
+    const schedule = await tx.doctorSchedule.findUnique({
+      where: { id: input.scheduleId },
+      include: {
+        doctor: { select: { id: true, name: true, role: true, isActive: true } },
+      },
+    });
+
+    if (
+      !schedule ||
+      !schedule.isActive ||
+      schedule.doctorId !== input.doctorId ||
+      schedule.doctor.role !== "DOCTOR" ||
+      !schedule.doctor.isActive ||
+      schedule.dayOfWeek !== expectedDay
+    ) {
+      throw new InvalidBookingDateError(
+        "Sesi praktik tidak aktif atau bukan untuk jadwal hari ini.",
+      );
+    }
+
+    if (timeToMinutes(currentTimeStr) > timeToMinutes(schedule.endTime)) {
+      throw new InvalidBookingDateError("Sesi praktik dokter ini sudah berakhir untuk hari ini.");
+    }
+
+    let patientId: string;
+    let patientName: string;
+    let medicalRecordNumber: string;
+    let isNewPatient = false;
+    let newPatientQrToken: string | null = null;
+
+    if (input.mode === "EXISTING") {
+      const existing = await tx.patient.findFirst({
+        where: activePatientWhere({ id: input.patientId }),
+        select: { id: true, name: true, medicalRecordNumber: true },
+      });
+      if (!existing) {
+        throw new InvalidAppointmentStateError("Pasien tidak ditemukan.");
+      }
+      patientId = existing.id;
+      patientName = existing.name;
+      medicalRecordNumber = existing.medicalRecordNumber;
+    } else {
+      const normalized = normalizeMemberInput({
+        ...input.newPatient,
+        relationship: "OTHER",
+      });
+
+      if (normalized.nik) {
+        const byNik = await tx.patient.findFirst({
+          where: activePatientWhere({ nik: normalized.nik }),
+          select: { id: true, name: true, medicalRecordNumber: true, birthDate: true },
+        });
+        if (byNik) {
+          throw new DuplicatePatientError({
+            id: byNik.id,
+            name: byNik.name,
+            medicalRecordNumber: byNik.medicalRecordNumber,
+            ageLabel: ageLabel(byNik.birthDate),
+          });
+        }
+      }
+
+      if (normalized.phone) {
+        const byIdentity = await tx.patient.findFirst({
+          where: activePatientWhere({
+            name: normalized.name,
+            birthDate: normalized.birthDate,
+            phone: normalized.phone,
+          }),
+          select: { id: true, name: true, medicalRecordNumber: true, birthDate: true },
+        });
+        if (byIdentity) {
+          throw new DuplicatePatientError({
+            id: byIdentity.id,
+            name: byIdentity.name,
+            medicalRecordNumber: byIdentity.medicalRecordNumber,
+            ageLabel: ageLabel(byIdentity.birthDate),
+          });
+        }
+      }
+
+      const createdPatient = await createPatient(tx, {
+        ...normalized,
+        accountUserId: null,
+        createdByUserId: staffUserId,
+        isSelf: false,
+      });
+
+      patientId = createdPatient.id;
+      patientName = createdPatient.name;
+      medicalRecordNumber = createdPatient.medicalRecordNumber;
+      isNewPatient = true;
+      newPatientQrToken = createdPatient.qrToken;
+    }
+
+    const duplicateAppointment = await tx.appointment.findFirst({
+      where: {
+        patientId,
+        doctorId: schedule.doctorId,
+        appointmentDate: targetDate,
+        status: { in: ["PENDING", "CONFIRMED", "IN_PROGRESS"] },
+      },
+      select: { id: true },
+    });
+
+    if (duplicateAppointment) {
+      throw new DuplicateAppointmentError(
+        "Pasien sudah memiliki janji aktif hari ini pada dokter tersebut. Arahkan ke halaman Check-in.",
+      );
+    }
+
+    const now = new Date();
+    const queueNumber = await nextQueueNumber(tx, schedule.doctorId, todayStr);
+    const formattedQueueNumber = formatQueueNumber(queueNumber);
+
+    const createdAppointment = await tx.appointment.create({
+      data: {
+        patientId,
+        doctorId: schedule.doctorId,
+        scheduleId: schedule.id,
+        source: "WALK_IN",
+        appointmentDate: targetDate,
+        startTime: schedule.startTime,
+        endTime: schedule.endTime,
+        queueNumber,
+        status: "CONFIRMED",
+        checkedInAt: now,
+        checkedInByUserId: staffUserId,
+        chiefComplaint: input.chiefComplaint.trim(),
+      },
+    });
+
+    await tx.appointmentHistory.create({
+      data: {
+        appointmentId: createdAppointment.id,
+        status: "CONFIRMED",
+        notes: `Pendaftaran walk-in oleh staf pendaftaran. Nomor antrean: ${formattedQueueNumber}.`,
+        changedByUserId: staffUserId,
+      },
+    });
+
+    return {
+      appointmentId: createdAppointment.id,
+      patientId,
+      patientName,
+      medicalRecordNumber,
+      doctorName: schedule.doctor.name,
+      appointmentDate: todayStr,
+      startTime: schedule.startTime,
+      endTime: schedule.endTime,
+      queueNumber,
+      formattedQueueNumber,
+      isNewPatient,
+      newPatientQrToken,
+    };
+  });
+}
+
+/**
+ * Panggil pasien urutan berikutnya (nomor terkecil berstatus CONFIRMED yang sudah check-in
+ * dan belum dipanggil) untuk dokter tertentu hari ini.
+ * Aman dari klik ganda / dua staf bersamaan lewat kunci baris dokter + update bersyarat.
+ * Staf hanya mengisi `calledAt` dan log riwayat tanpa mengubah status `IN_PROGRESS`/`COMPLETED`.
+ */
+export async function callNextQueueByStaff(
+  staffUserId: string,
+  doctorId: string,
+  todayStr: string = jakartaTodayStr(),
+): Promise<{
+  appointmentId: string;
+  queueNumber: number;
+  formattedQueueNumber: string;
+  patientName: string;
+  calledAt: Date;
+}> {
+  const targetDate = parseDateOnlyUtc(todayStr);
+
+  return db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM users WHERE id = ${doctorId} AND role = 'DOCTOR' FOR UPDATE`;
+
+    const doctor = await tx.user.findUnique({
+      where: { id: doctorId },
+      select: { id: true, role: true },
+    });
+    if (!doctor || doctor.role !== "DOCTOR") {
+      throw new InvalidAppointmentStateError("Dokter tidak ditemukan.");
+    }
+
+    const nextAppt = await tx.appointment.findFirst({
+      where: {
+        doctorId,
+        appointmentDate: targetDate,
+        status: "CONFIRMED",
+        checkedInAt: { not: null },
+        calledAt: null,
+        queueNumber: { not: null },
+        patient: activePatientWhere(),
+      },
+      include: {
+        patient: { select: { name: true } },
+      },
+      orderBy: [{ queueNumber: "asc" }, { checkedInAt: "asc" }, { createdAt: "asc" }],
+    });
+
+    if (!nextAppt || nextAppt.queueNumber === null) {
+      throw new InvalidAppointmentStateError(
+        "Tidak ada pasien yang sedang menunggu untuk dokter ini.",
+      );
+    }
+
+    const now = new Date();
+    const updated = await tx.appointment.updateMany({
+      where: {
+        id: nextAppt.id,
+        status: "CONFIRMED",
+        checkedInAt: { not: null },
+        calledAt: null,
+      },
+      data: {
+        calledAt: now,
+      },
+    });
+
+    if (updated.count === 0) {
+      throw new InvalidAppointmentStateError("Pasien ini sudah dipanggil oleh petugas lain.");
+    }
+
+    const formattedQueueNumber = formatQueueNumber(nextAppt.queueNumber);
+
+    await tx.appointmentHistory.create({
+      data: {
+        appointmentId: nextAppt.id,
+        status: "CONFIRMED",
+        notes: `Dipanggil oleh staf pendaftaran (${formattedQueueNumber}).`,
+        changedByUserId: staffUserId,
+      },
+    });
+
+    return {
+      appointmentId: nextAppt.id,
+      queueNumber: nextAppt.queueNumber,
+      formattedQueueNumber,
+      patientName: nextAppt.patient.name,
+      calledAt: now,
+    };
+  });
+}
+
+/**
+ * Panggil ulang pasien yang sudah pernah dipanggil hari ini (hanya bila masih CONFIRMED).
+ */
+export async function recallQueueByStaff(
+  staffUserId: string,
+  appointmentId: string,
+  todayStr: string = jakartaTodayStr(),
+): Promise<{
+  appointmentId: string;
+  queueNumber: number | null;
+  formattedQueueNumber: string | null;
+  patientName: string;
+  calledAt: Date;
+}> {
+  const targetDate = parseDateOnlyUtc(todayStr);
+
+  return db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM appointments WHERE id = ${appointmentId} FOR UPDATE`;
+
+    const appointment = await tx.appointment.findUnique({
+      where: { id: appointmentId },
+      include: {
+        patient: { select: { name: true, deletedAt: true } },
+      },
+    });
+
+    if (!appointment || appointment.patient.deletedAt !== null) {
+      throw new InvalidAppointmentStateError("Antrean pasien tidak ditemukan.");
+    }
+    if (toDateInput(appointment.appointmentDate) !== todayStr) {
+      throw new InvalidAppointmentStateError("Hanya antrean hari ini yang dapat dipanggil ulang.");
+    }
+    if (appointment.status !== "CONFIRMED" || appointment.calledAt === null) {
+      throw new InvalidAppointmentStateError(
+        "Hanya pasien yang sudah dipanggil dan belum diperiksa yang dapat dipanggil ulang.",
+      );
+    }
+
+    const now = new Date();
+    const updated = await tx.appointment.updateMany({
+      where: {
+        id: appointment.id,
+        appointmentDate: targetDate,
+        status: "CONFIRMED",
+        calledAt: { not: null },
+      },
+      data: {
+        calledAt: now,
+      },
+    });
+
+    if (updated.count === 0) {
+      throw new InvalidAppointmentStateError(
+        "Status antrean sudah berubah dan tidak dapat dipanggil ulang.",
+      );
+    }
+
+    const formattedQueueNumber =
+      appointment.queueNumber !== null ? formatQueueNumber(appointment.queueNumber) : null;
+    const queueLabel = formattedQueueNumber ? ` (${formattedQueueNumber})` : "";
+
+    await tx.appointmentHistory.create({
+      data: {
+        appointmentId: appointment.id,
+        status: "CONFIRMED",
+        notes: `Dipanggil ulang oleh staf pendaftaran${queueLabel}.`,
+        changedByUserId: staffUserId,
+      },
+    });
+
+    return {
+      appointmentId: appointment.id,
+      queueNumber: appointment.queueNumber,
+      formattedQueueNumber,
+      patientName: appointment.patient.name,
+      calledAt: now,
+    };
+  });
+}
+
+/**
+ * Tandai antrean CONFIRMED hari ini sebagai Tidak Hadir (NO_SHOW).
+ */
+export async function markAppointmentNoShowByStaff(
+  staffUserId: string,
+  appointmentId: string,
+  todayStr: string = jakartaTodayStr(),
+): Promise<{
+  appointmentId: string;
+  queueNumber: number | null;
+  formattedQueueNumber: string | null;
+  patientName: string;
+}> {
+  const targetDate = parseDateOnlyUtc(todayStr);
+
+  return db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM appointments WHERE id = ${appointmentId} FOR UPDATE`;
+
+    const appointment = await tx.appointment.findUnique({
+      where: { id: appointmentId },
+      include: {
+        patient: { select: { name: true, deletedAt: true } },
+      },
+    });
+
+    if (!appointment || appointment.patient.deletedAt !== null) {
+      throw new InvalidAppointmentStateError("Antrean pasien tidak ditemukan.");
+    }
+    if (toDateInput(appointment.appointmentDate) !== todayStr) {
+      throw new InvalidAppointmentStateError(
+        "Hanya antrean hari ini yang dapat ditandai tidak hadir.",
+      );
+    }
+    if (appointment.status !== "CONFIRMED") {
+      throw new InvalidAppointmentStateError(
+        "Hanya antrean yang belum mulai diperiksa yang dapat ditandai tidak hadir.",
+      );
+    }
+
+    const updated = await tx.appointment.updateMany({
+      where: {
+        id: appointment.id,
+        appointmentDate: targetDate,
+        status: "CONFIRMED",
+      },
+      data: {
+        status: "NO_SHOW",
+      },
+    });
+
+    if (updated.count === 0) {
+      throw new InvalidAppointmentStateError(
+        "Status antrean sudah berubah dan tidak dapat ditandai tidak hadir.",
+      );
+    }
+
+    const formattedQueueNumber =
+      appointment.queueNumber !== null ? formatQueueNumber(appointment.queueNumber) : null;
+    const queueLabel = formattedQueueNumber ? ` (${formattedQueueNumber})` : "";
+
+    await tx.appointmentHistory.create({
+      data: {
+        appointmentId: appointment.id,
+        status: "NO_SHOW",
+        notes: `Ditandai tidak hadir oleh staf pendaftaran${queueLabel}.`,
+        changedByUserId: staffUserId,
+      },
+    });
+
+    return {
+      appointmentId: appointment.id,
+      queueNumber: appointment.queueNumber,
+      formattedQueueNumber,
+      patientName: appointment.patient.name,
+    };
+  });
 }

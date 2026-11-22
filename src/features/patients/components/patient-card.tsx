@@ -8,7 +8,13 @@ import type { PatientView } from "@/features/patients/queries";
  * Kartu pasien: identitas berobat (No. RM paling menonjol, seperti kartu berobat).
  * Menandai alergi bila ada (dipakai juga fitur Red Flag modul dokter).
  */
-export function PatientCard({ patient }: { patient: PatientView }) {
+export function PatientCard({
+  patient,
+  qrAction,
+}: {
+  patient: PatientView;
+  qrAction?: React.ReactNode;
+}) {
   const facts = [
     { label: "Umur", value: ageLabel(patient.birthDate) },
     { label: "Jenis kelamin", value: GENDER_LABEL[patient.gender] },
@@ -19,14 +25,17 @@ export function PatientCard({ patient }: { patient: PatientView }) {
       aria-label={`Kartu pasien ${patient.name}`}
       className="border-primary-200 bg-surface shadow-card overflow-hidden rounded-2xl border"
     >
-      <div className="bg-primary-700 text-surface flex items-center gap-4 px-5 py-4 sm:px-6">
-        <UserAvatar name={patient.name} size="lg" className="bg-surface text-primary-800" />
-        <div className="min-w-0">
-          <h2 className="truncate text-lg font-bold">{patient.name}</h2>
-          <p className="text-primary-100 text-sm">
-            {patient.isSelf ? "Pemilik akun" : RELATIONSHIP_LABEL[patient.relationship]}
-          </p>
+      <div className="bg-primary-700 text-surface flex items-center justify-between gap-4 px-5 py-4 sm:px-6">
+        <div className="flex min-w-0 items-center gap-4">
+          <UserAvatar name={patient.name} size="lg" className="bg-surface text-primary-800" />
+          <div className="min-w-0">
+            <h2 className="truncate text-lg font-bold">{patient.name}</h2>
+            <p className="text-primary-100 text-sm">
+              {patient.isSelf ? "Pemilik akun" : RELATIONSHIP_LABEL[patient.relationship]}
+            </p>
+          </div>
         </div>
+        {qrAction ? <div className="shrink-0">{qrAction}</div> : null}
       </div>
       <div className="grid gap-5 px-5 py-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] sm:px-6">
         <div>

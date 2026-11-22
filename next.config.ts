@@ -14,6 +14,16 @@ const nextConfig: NextConfig = {
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },
+  webpack(config, { dev }) {
+    if (dev) {
+      config.watchOptions = {
+        ...config.watchOptions,
+        ignored:
+          /([\\/]\.git[\\/]|[\\/]node_modules[\\/]|[\\/]docs[\\/]|[\\/]test-results[\\/]|[\\/]playwright-report[\\/])/,
+      };
+    }
+    return config;
+  },
 };
 
 export default nextConfig;

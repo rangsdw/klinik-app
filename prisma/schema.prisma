@@ -108,7 +108,8 @@ model Counter {
 
 model Patient {
   id                  String       @id @default(cuid())
-  accountUserId       String       @map("account_user_id")
+  accountUserId       String?      @map("account_user_id")
+  createdByUserId     String?      @map("created_by_user_id")
   /// Format RM-YYYY-000001, digenerate di features/patients/service.ts
   medicalRecordNumber String       @unique @map("medical_record_number") @db.VarChar(20)
   nik                 String?      @unique @db.Char(16)
@@ -128,7 +129,7 @@ model Patient {
   createdAt           DateTime     @default(now()) @map("created_at")
   updatedAt           DateTime     @updatedAt @map("updated_at")
 
-  account User @relation(fields: [accountUserId], references: [id], onDelete: Cascade)
+  account User? @relation(fields: [accountUserId], references: [id], onDelete: Cascade)
   appointments   Appointment[]
   medicalRecords MedicalRecord[]
 
@@ -171,11 +172,17 @@ enum AppointmentStatus {
   REJECTED
 }
 
+enum AppointmentSource {
+  ONLINE
+  WALK_IN
+}
+
 model Appointment {
   id              String            @id @default(cuid())
   patientId       String            @map("patient_id")
   doctorId        String            @map("doctor_id")
   scheduleId      String?           @map("schedule_id")
+  source          AppointmentSource @default(ONLINE)
   appointmentDate DateTime          @map("appointment_date") @db.Date
   startTime       String            @map("start_time") @db.VarChar(5)
   endTime         String            @map("end_time") @db.VarChar(5)
@@ -183,9 +190,12 @@ model Appointment {
   status          AppointmentStatus @default(PENDING)
   chiefComplaint  String?           @map("chief_complaint") @db.Text
   rejectionReason String?           @map("rejection_reason") @db.Text
-  rescheduledAt   DateTime?         @map("rescheduled_at")
-  rescheduleNote  String?           @map("reschedule_note") @db.Text
-  createdAt       DateTime          @default(now()) @map("created_at")
+  rescheduledAt     DateTime?         @map("rescheduled_at")
+  rescheduleNote    String?           @map("reschedule_note") @db.Text
+  checkedInAt       DateTime?         @map("checked_in_at")
+  checkedInByUserId String?           @map("checked_in_by_user_id")
+  calledAt          DateTime?         @map("called_at")
+  createdAt         DateTime          @default(now()) @map("created_at")
   updatedAt       DateTime          @updatedAt @map("updated_at")
 
   patient         Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
@@ -196,6 +206,7 @@ model Appointment {
 
   @@index([patientId])
   @@index([doctorId, appointmentDate])
+  @@index([doctorId, appointmentDate, status])
   @@index([scheduleId, appointmentDate])
   @@map("appointments")
 }
