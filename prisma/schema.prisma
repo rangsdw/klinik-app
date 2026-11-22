@@ -278,6 +278,9 @@ model Medicine {
   updatedAt   DateTime           @updatedAt @map("updated_at")
 
   prescriptionItems PrescriptionItem[]
+  batches MedicineBatch[]
+  stockLogs StockLog[]
+  minimumStock Int @default(10) @map("minimum_stock")
 
   @@map("medicines")
 }
@@ -299,6 +302,44 @@ model PrescriptionItem {
   @@map("prescription_items")
 }
 
+
+model MedicineBatch {
+  id String @id @default(cuid())
+  medicineId String @map("medicine_id")
+  batchNumber String @map("batch_number") @db.VarChar(100)
+  expiryDate DateTime @map("expiry_date") @db.Date
+  quantity Int @default(0)
+  receivedAt DateTime @default(now()) @map("received_at")
+  medicine Medicine @relation(fields: [medicineId], references: [id])
+  logs StockLog[]
+
+  @@unique([medicineId, batchNumber])
+  @@index([medicineId, expiryDate])
+  @@map("medicine_batches")
+}
+
+enum StockMovementType {
+  IN
+  OUT
+}
+
+model StockLog {
+  id String @id @default(cuid())
+  medicineId String @map("medicine_id")
+  batchId String @map("batch_id")
+  type StockMovementType
+  quantity Int
+  balanceAfter Int @map("balance_after")
+  note String? @db.VarChar(255)
+  actorId String @map("actor_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  medicine Medicine @relation(fields: [medicineId], references: [id])
+  batch MedicineBatch @relation(fields: [batchId], references: [id])
+
+  @@index([medicineId, createdAt])
+  @@index([batchId])
+  @@map("stock_logs")
+}
 
 enum PharmacyStatus {
   WAITING
