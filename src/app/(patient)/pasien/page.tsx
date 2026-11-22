@@ -10,9 +10,12 @@ import {
 } from "lucide-react";
 import { requireRole } from "@/lib/rbac";
 import { firstName } from "@/lib/date";
+import { clinicConfig } from "@/config/clinic";
 import { getActivePatient, listPatientsForAccount } from "@/features/patients/queries";
+import { renderPatientQrSvg } from "@/features/patients/qr-render";
 import { PatientSwitcher } from "@/features/patients/components/patient-switcher";
 import { PatientCard } from "@/features/patients/components/patient-card";
+import { PatientQrDialog } from "@/features/patients/components/patient-qr-dialog";
 import { OneTimeToast } from "@/features/patients/components/welcome-toast";
 
 export const metadata: Metadata = { title: "Beranda pasien" };
@@ -36,6 +39,7 @@ export default async function PatientHomePage({
     getActivePatient(user.id),
     searchParams,
   ]);
+  const activeQrSvg = active ? await renderPatientQrSvg(active.qrToken) : null;
 
   const shortcuts: Shortcut[] = [
     {
@@ -88,7 +92,28 @@ export default async function PatientHomePage({
         ) : null}
       </div>
 
-      {active ? <PatientCard patient={active} /> : null}
+      {active ? (
+        <PatientCard
+          patient={active}
+          qrAction={
+            activeQrSvg ? (
+              <PatientQrDialog
+                patientId={active.id}
+                patientName={active.name}
+                medicalRecordNumber={active.medicalRecordNumber}
+                qrSvg={activeQrSvg}
+                clinicName={clinicConfig.name}
+                clinicAddress={clinicConfig.address}
+                clinicPhone={clinicConfig.phone}
+                allowRegenerate
+                triggerLabel="Tampilkan QR"
+                triggerVariant="secondary"
+                triggerClassName="bg-surface text-primary-800 hover:bg-primary-50 min-h-11"
+              />
+            ) : null
+          }
+        />
+      ) : null}
 
       <section aria-labelledby="pintasan">
         <h2 id="pintasan" className="sr-only">

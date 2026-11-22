@@ -27,6 +27,8 @@ import {
   BCRYPT_COST,
   FamilyLimitError,
   normalizeMemberInput,
+  PatientNotOwnedError,
+  regeneratePatientQrToken,
   uniqueFieldFromError,
 } from "@/features/patients/service";
 
@@ -184,4 +186,21 @@ export async function changePasswordAction(input: ChangePasswordInput): Promise<
     data: { passwordHash: await bcrypt.hash(parsed.data.newPassword, BCRYPT_COST) },
   });
   return { ok: true, message: "Password berhasil diganti." };
+}
+
+/** Ganti token QR Code pasien agar QR lama yang hilang/bocor langsung tidak berlaku. */
+export async function regeneratePatientQrAction(patientId: string): Promise<ActionResult> {
+  const user = await requireRole("PATIENT");
+  try {
+    await regeneratePatientQrToken(user.id, patientId);
+  } catch (error) {
+    if (error instanceof PatientNotOwnedError) notFound();
+    throw error;
+  }
+  revalidatePath("/pasien", "layout");
+  revalidatePath(`/pasien/keluarga/${patientId}`);
+  return {
+    ok: true,
+    message: "QR Code baru berhasil dibuat. QR lama sudah tidak berlaku.",
+  };
 }

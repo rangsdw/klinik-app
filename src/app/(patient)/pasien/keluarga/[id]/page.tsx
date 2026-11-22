@@ -1,13 +1,16 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ChevronLeft, QrCode } from "lucide-react";
+import { ChevronLeft } from "lucide-react";
 import { requireRole } from "@/lib/rbac";
 import { formatDate } from "@/lib/date";
+import { clinicConfig } from "@/config/clinic";
 import { getOwnedPatient } from "@/features/patients/queries";
+import { renderPatientQrSvg } from "@/features/patients/qr-render";
 import { PatientCard } from "@/features/patients/components/patient-card";
 import { MemberFormDialog } from "@/features/patients/components/member-form-dialog";
 import { DeleteMemberButton } from "@/features/patients/components/delete-member-button";
+import { PatientQrDialog } from "@/features/patients/components/patient-qr-dialog";
 
 export const metadata: Metadata = { title: "Detail anggota" };
 
@@ -17,6 +20,8 @@ export default async function MemberDetailPage({ params }: { params: Promise<{ i
   // Kepemilikan divalidasi di server: pasien akun lain -> 404.
   const patient = await getOwnedPatient(user.id, id);
   if (!patient) notFound();
+
+  const qrSvg = await renderPatientQrSvg(patient.qrToken);
 
   const details = [
     { label: "NIK", value: patient.nik },
@@ -65,18 +70,36 @@ export default async function MemberDetailPage({ params }: { params: Promise<{ i
 
         <section
           aria-labelledby="qr-pasien"
-          className="border-line-strong bg-surface flex flex-col items-center justify-center rounded-2xl border border-dashed p-6 text-center"
+          className="border-line bg-surface flex flex-col items-center justify-center rounded-2xl border p-6 text-center"
         >
-          <span className="bg-primary-50 text-primary-700 grid size-14 place-items-center rounded-full">
-            <QrCode aria-hidden="true" className="size-7" />
-          </span>
+          <div className="bg-qr-surface text-qr-ink border-line rounded-xl border p-3">
+            <div
+              aria-label={`Pratinjau QR Code ${patient.name}`}
+              className="w-36 [&_svg]:h-auto [&_svg]:w-full"
+              dangerouslySetInnerHTML={{ __html: qrSvg }}
+            />
+          </div>
           <h2 id="qr-pasien" className="text-ink-strong mt-4 font-semibold">
             QR Code pasien
           </h2>
           <p className="text-ink-muted mt-1 max-w-xs text-sm">
-            QR untuk check-in di klinik akan tampil di sini. Nomor RM:{" "}
+            Tunjukkan QR ini ke petugas pendaftaran. Nomor RM:{" "}
             <span className="tabular text-ink font-semibold">{patient.medicalRecordNumber}</span>
           </p>
+          <div className="mt-4">
+            <PatientQrDialog
+              patientId={patient.id}
+              patientName={patient.name}
+              medicalRecordNumber={patient.medicalRecordNumber}
+              qrSvg={qrSvg}
+              clinicName={clinicConfig.name}
+              clinicAddress={clinicConfig.address}
+              clinicPhone={clinicConfig.phone}
+              allowRegenerate
+              triggerLabel="Tampilkan QR"
+              triggerClassName="bg-primary-700 text-surface hover:bg-primary-800 min-h-11"
+            />
+          </div>
         </section>
       </div>
     </div>

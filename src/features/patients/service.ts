@@ -13,7 +13,7 @@ import {
   normalizeText,
 } from "@/lib/normalize";
 import { MAX_FAMILY_MEMBERS } from "@/config/clinic";
-import { activePatientWhere } from "@/features/patients/queries";
+import { activePatientWhere, getOwnedPatient } from "@/features/patients/queries";
 import type { FamilyMemberInput } from "@/features/patients/schemas";
 import type { RegisterInput } from "@/features/auth/schemas";
 
@@ -131,4 +131,28 @@ export function uniqueFieldFromError(error: unknown): string | null {
   if (t.includes("phone")) return "phone";
   if (t.includes("nik")) return "nik";
   return "unknown";
+}
+
+export class PatientNotOwnedError extends Error {
+  constructor(message = "Pasien tidak ditemukan.") {
+    super(message);
+    this.name = "PatientNotOwnedError";
+  }
+}
+
+/**
+ * Terbitkan token QR baru untuk pasien milik akun yang login.
+ * Token lama langsung tidak berlaku di database.
+ */
+export async function regeneratePatientQrToken(accountUserId: string, patientId: string) {
+  const owned = await getOwnedPatient(accountUserId, patientId);
+  if (!owned) {
+    throw new PatientNotOwnedError();
+  }
+
+  return db.patient.update({
+    where: { id: owned.id },
+    data: { qrToken: randomUUID() },
+    select: { id: true, qrToken: true },
+  });
 }
