@@ -10,6 +10,7 @@ import {
   UserPlus,
   Users,
   History,
+  Stethoscope,
 } from "lucide-react";
 import type { RoleName, StaffTypeName } from "@/lib/roles";
 
@@ -34,6 +35,7 @@ export const appNavigation: NavItem[] = [
 
   // --- Dokter
   { title: "Dashboard & Janji", href: "/dokter", icon: LayoutDashboard, roles: ["DOCTOR"] },
+  { title: "Pemeriksaan", href: "/dokter/periksa", icon: Stethoscope, roles: ["DOCTOR"] },
   { title: "Daftar Pasien", href: "/dokter/pasien", icon: Users, roles: ["DOCTOR"] },
   { title: "Stok Obat", href: "/dokter/obat", icon: Pill, roles: ["DOCTOR"] },
 

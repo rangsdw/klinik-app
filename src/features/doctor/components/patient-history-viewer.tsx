@@ -12,6 +12,7 @@ import {
   AlertCircle,
   Pill,
   ChevronRight,
+  Info,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -24,7 +25,8 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import type { Medicine, AppointmentStatus } from "@prisma/client";
+import type { AppointmentStatus } from "@prisma/client";
+import type { SerializedMedicine } from "../queries";
 
 type PatientItem = {
   id: string;
@@ -62,7 +64,7 @@ type PatientItem = {
         quantity: number;
         dosageInstructions: string;
         notes: string | null;
-        medicine: Medicine;
+        medicine: SerializedMedicine;
       }[];
     } | null;
   }[];
@@ -260,6 +262,9 @@ export function PatientHistoryViewer({ initialPatients, searchQuery }: Props) {
                             year: "numeric",
                           },
                         );
+                        const hasPrescriptions =
+                          app.medicalRecord?.prescriptions &&
+                          app.medicalRecord.prescriptions.length > 0;
 
                         return (
                           <div
@@ -300,7 +305,7 @@ export function PatientHistoryViewer({ initialPatients, searchQuery }: Props) {
 
                             {/* Tombol Lihat Catatan Medis */}
                             {app.medicalRecord ? (
-                              <div className="pt-1">
+                              <div className="flex items-center gap-2 pt-1">
                                 <Button
                                   variant="outline"
                                   size="sm"
@@ -310,6 +315,13 @@ export function PatientHistoryViewer({ initialPatients, searchQuery }: Props) {
                                   <FileText className="size-3.5" />
                                   Buka Catatan Pemeriksaan &amp; Resep
                                 </Button>
+
+                                {hasPrescriptions && (
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-primary-700 bg-primary-50 px-2 py-1 rounded border border-primary-200">
+                                    <Pill className="size-3 text-primary-600" />
+                                    {app.medicalRecord.prescriptions.length} Obat
+                                  </span>
+                                )}
                               </div>
                             ) : (
                               <p className="text-[11px] text-ink-muted italic pt-1">
@@ -339,7 +351,7 @@ export function PatientHistoryViewer({ initialPatients, searchQuery }: Props) {
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2 text-base font-semibold text-ink-strong">
                 <FileText className="size-4 text-primary-700" />
-                Catatan Rekam Medis &amp; SOAP
+                Catatan Rekam Medis &amp; E-Resep Pasien
               </DialogTitle>
               <DialogDescription className="text-xs text-ink-soft">
                 Kunjungan tanggal{" "}
@@ -432,31 +444,43 @@ export function PatientHistoryViewer({ initialPatients, searchQuery }: Props) {
                 </div>
               </div>
 
-              {/* Resep Obat */}
+              {/* Resep Obat Elektronik */}
               <div className="rounded-xl border border-line p-3 space-y-2">
                 <div className="flex items-center gap-1.5 text-xs font-semibold text-ink-strong">
                   <Pill className="size-3.5 text-primary-600" />
-                  <span>Resep Obat yang Diberikan</span>
+                  <span>Resep Obat yang Diberikan (E-Resep)</span>
                 </div>
                 {viewingAppointment.medicalRecord.prescriptions.length === 0 ? (
                   <p className="text-xs text-ink-muted italic">Tidak ada resep obat.</p>
                 ) : (
-                  <div className="space-y-1.5">
+                  <div className="space-y-2">
                     {viewingAppointment.medicalRecord.prescriptions.map((pr) => (
                       <div
                         key={pr.id}
-                        className="flex items-center justify-between rounded bg-paper px-2.5 py-1.5 text-xs border border-line"
+                        className="rounded-lg bg-paper p-3 text-xs border border-line space-y-1"
                       >
-                        <div>
-                          <span className="font-semibold text-ink-strong">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-ink-strong text-sm">
                             {pr.medicine.name}
-                          </span>{" "}
-                          <span className="text-ink-muted">({pr.medicine.dosageForm})</span>
-                          <p className="text-ink-soft">{pr.dosageInstructions}</p>
+                          </span>
+                          <span className="font-mono font-bold text-primary-800 bg-primary-50 px-2 py-0.5 rounded border border-primary-200">
+                            x{pr.quantity} {pr.medicine.unit}
+                          </span>
                         </div>
-                        <span className="font-mono font-medium text-ink-strong">
-                          x{pr.quantity} {pr.medicine.unit}
-                        </span>
+
+                        <div className="text-ink-soft">
+                          <span className="font-medium text-ink-strong">Aturan Pakai:</span>{" "}
+                          <span className="font-medium text-primary-700">{pr.dosageInstructions}</span>
+                        </div>
+
+                        {pr.notes && (
+                          <div className="text-[11px] text-ink-muted flex items-start gap-1 pt-0.5">
+                            <Info className="size-3 shrink-0 mt-0.5 text-ink-soft" />
+                            <span>
+                              <span className="font-medium">Catatan:</span> {pr.notes}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>

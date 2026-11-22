@@ -30,18 +30,52 @@ function NavList({
   const pathname = usePathname();
   const items = navigationFor(role, staffType);
   const hrefs = items.map((i) => i.href);
+
+  const [activeExam, setActiveExam] = useState<{
+    id: string;
+    patientName: string;
+    queueNumber: number | null;
+  } | null>(null);
+
+  useEffect(() => {
+    function readExam() {
+      try {
+        const raw = localStorage.getItem("active_exam");
+        if (raw) setActiveExam(JSON.parse(raw));
+        else setActiveExam(null);
+      } catch {
+        setActiveExam(null);
+      }
+    }
+    readExam();
+    window.addEventListener("active_exam_changed", readExam);
+    return () => window.removeEventListener("active_exam_changed", readExam);
+  }, []);
+
   return (
     <nav aria-label="Menu utama">
       <ul className="space-y-1">
         {items.map((item) => {
-          const active = isActive(pathname, item.href, hrefs);
+          let itemHref = item.href;
+          let itemTitle = item.title;
+          const isExamItem = item.href === "/dokter/periksa";
+
+          if (isExamItem && activeExam) {
+            itemHref = `/dokter/periksa/${activeExam.id}`;
+            itemTitle = `Periksa: ${activeExam.patientName}`;
+          }
+
+          const active =
+            isActive(pathname, item.href, hrefs) ||
+            (isExamItem && pathname.startsWith("/dokter/periksa"));
+
           return (
             <li key={item.href}>
               <Link
-                href={item.href}
+                href={itemHref}
                 onClick={onNavigate}
                 aria-current={active ? "page" : undefined}
-                title={collapsed ? item.title : undefined}
+                title={collapsed ? itemTitle : undefined}
                 className={cn(
                   "flex h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors",
                   active
@@ -50,11 +84,32 @@ function NavList({
                   collapsed && "justify-center px-0",
                 )}
               >
-                <item.icon
-                  aria-hidden="true"
-                  className={cn("size-5 shrink-0", active ? "text-primary-700" : "text-ink-muted")}
-                />
-                <span className={cn(collapsed && "sr-only")}>{item.title}</span>
+                <div className="relative flex shrink-0 items-center justify-center">
+                  <item.icon
+                    aria-hidden="true"
+                    className={cn(
+                      "size-5",
+                      active ? "text-primary-700" : "text-ink-muted",
+                      isExamItem && activeExam && "text-primary-700 animate-pulse",
+                    )}
+                  />
+                  {isExamItem && activeExam && (
+                    <span className="absolute -top-1 -right-1 size-2 rounded-full bg-success ring-2 ring-surface" />
+                  )}
+                </div>
+                <div
+                  className={cn(
+                    "flex flex-1 items-center justify-between min-w-0",
+                    collapsed && "sr-only",
+                  )}
+                >
+                  <span className="truncate">{itemTitle}</span>
+                  {isExamItem && activeExam && (
+                    <span className="ml-1.5 shrink-0 rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-semibold text-primary-800">
+                      Aktif
+                    </span>
+                  )}
+                </div>
               </Link>
             </li>
           );

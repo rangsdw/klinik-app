@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   CalendarClock,
@@ -11,6 +12,7 @@ import {
   Calendar,
   AlertTriangle,
   Play,
+  Pill,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -19,8 +21,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { setAppointmentStatusAction } from "../actions";
 import { EditScheduleDialog } from "./edit-schedule-dialog";
-import { SoapModal } from "./soap-modal";
-import type { Medicine, AppointmentStatus } from "@prisma/client";
+import type { AppointmentStatus } from "@prisma/client";
+import type { SerializedMedicine } from "../queries";
 
 type AppointmentItem = {
   id: string;
@@ -57,7 +59,7 @@ type AppointmentItem = {
       quantity: number;
       dosageInstructions: string;
       notes: string | null;
-      medicine: Medicine;
+      medicine: SerializedMedicine;
     }[];
   } | null;
 };
@@ -72,7 +74,6 @@ type Props = {
     completed: number;
   };
   appointments: AppointmentItem[];
-  availableMedicines: Medicine[];
 };
 
 export function DoctorAppointmentView({
@@ -80,12 +81,10 @@ export function DoctorAppointmentView({
   currentDate,
   stats,
   appointments,
-  availableMedicines,
 }: Props) {
   const router = useRouter();
   const [selectedDate, setSelectedDate] = useState(currentDate);
   const [editingAppointment, setEditingAppointment] = useState<AppointmentItem | null>(null);
-  const [soapAppointment, setSoapAppointment] = useState<AppointmentItem | null>(null);
 
   function handleDateChange(newDate: string) {
     setSelectedDate(newDate);
@@ -136,7 +135,7 @@ export function DoctorAppointmentView({
             Selamat Bertugas, {doctorName}
           </h1>
           <p className="text-sm text-ink-soft">
-            Kelola jadwal konsultasi, pemeriksaan fisik SOAP, dan resep pasien Anda.
+            Kelola antrean harian, rekam medis SOAP, dan penerbitan e-resep farmasi pasien.
           </p>
         </div>
 
@@ -232,6 +231,7 @@ export function DoctorAppointmentView({
                 rec?.bodyTemperature != null ||
                 rec?.bodyWeight != null ||
                 rec?.pulseRate != null;
+              const prescriptionsCount = rec?.prescriptions?.length || 0;
 
               return (
                 <Card
@@ -320,6 +320,24 @@ export function DoctorAppointmentView({
                               )}
                             </div>
                           )}
+
+                          {/* E-Resep Badge Summary if already prescribed */}
+                          {prescriptionsCount > 0 && (
+                            <div className="flex flex-wrap items-center gap-1.5 pt-1.5">
+                              <span className="inline-flex items-center gap-1 rounded-md bg-primary-50 px-2 py-0.5 text-[11px] font-semibold text-primary-800 border border-primary-200">
+                                <Pill className="size-3 text-primary-700" />
+                                E-Resep: {prescriptionsCount} Macam Obat
+                              </span>
+                              {rec?.prescriptions.map((pr) => (
+                                <span
+                                  key={pr.medicineId}
+                                  className="text-[10px] text-ink-muted bg-paper px-1.5 py-0.5 rounded border border-line"
+                                >
+                                  {pr.medicine.name} (x{pr.quantity})
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -348,12 +366,56 @@ export function DoctorAppointmentView({
                         </Button>
 
                         <Button
+                          variant="outline"
                           size="sm"
-                          onClick={() => setSoapAppointment(item)}
+                          asChild
+                          className="h-8 gap-1.5 text-xs border-primary-300 text-primary-800 hover:bg-primary-50"
+                        >
+                          <Link
+                            href={`/dokter/periksa/${item.id}?tab=prescription`}
+                            onClick={() => {
+                              try {
+                                localStorage.setItem(
+                                  "active_exam",
+                                  JSON.stringify({
+                                    id: item.id,
+                                    patientName: item.patient.name,
+                                    queueNumber: item.queueNumber,
+                                  }),
+                                );
+                                window.dispatchEvent(new Event("active_exam_changed"));
+                              } catch {}
+                            }}
+                          >
+                            <Pill className="size-3.5 text-primary-700" />
+                            {prescriptionsCount > 0 ? "Edit E-Resep" : "Buat E-Resep"}
+                          </Link>
+                        </Button>
+
+                        <Button
+                          size="sm"
+                          asChild
                           className="h-8 gap-1.5 text-xs bg-primary-700 hover:bg-primary-800 text-surface"
                         >
-                          <Stethoscope className="size-3.5" />
-                          {item.status === "COMPLETED" ? "Lihat / Edit SOAP" : "Periksa & SOAP"}
+                          <Link
+                            href={`/dokter/periksa/${item.id}`}
+                            onClick={() => {
+                              try {
+                                localStorage.setItem(
+                                  "active_exam",
+                                  JSON.stringify({
+                                    id: item.id,
+                                    patientName: item.patient.name,
+                                    queueNumber: item.queueNumber,
+                                  }),
+                                );
+                                window.dispatchEvent(new Event("active_exam_changed"));
+                              } catch {}
+                            }}
+                          >
+                            <Stethoscope className="size-3.5" />
+                            {item.status === "COMPLETED" ? "Lihat / Edit SOAP" : "Periksa & SOAP"}
+                          </Link>
                         </Button>
                       </div>
                     </div>
@@ -379,16 +441,6 @@ export function DoctorAppointmentView({
             patientName: editingAppointment.patient.name,
             queueNumber: editingAppointment.queueNumber,
           }}
-        />
-      )}
-
-      {/* Modal Pemeriksaan SOAP */}
-      {soapAppointment && (
-        <SoapModal
-          open={!!soapAppointment}
-          onOpenChange={(open) => !open && setSoapAppointment(null)}
-          appointment={soapAppointment}
-          availableMedicines={availableMedicines}
         />
       )}
     </div>
