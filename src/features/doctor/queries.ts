@@ -176,16 +176,31 @@ export async function getPatientsWithHistory(searchQuery?: string) {
 }
 
 export async function getMedicinesList(): Promise<SerializedMedicine[]> {
+  const todayUtc = parseDateOnlyUtc(jakartaTodayStr());
   const medicines = await db.medicine.findMany({
     where: { isActive: true },
+    include: {
+      batches: {
+        where: {
+          quantity: { gt: 0 },
+          expiryDate: { gte: todayUtc },
+          batchNumber: { not: "LEGACY-PERLU-VERIFIKASI" },
+        },
+        select: { quantity: true },
+      },
+    },
     orderBy: { name: "asc" },
   });
 
-  return medicines.map((m) => ({
-    ...m,
-    price: Number(m.price),
-    minimumStock: m.minimumStock ?? 10,
-  }));
+  return medicines.map(({ batches, ...m }) => {
+    const batchStock = batches.reduce((sum, b) => sum + b.quantity, 0);
+    return {
+      ...m,
+      stock: Math.min(m.stock, batchStock),
+      price: Number(m.price),
+      minimumStock: m.minimumStock ?? 10,
+    };
+  });
 }
 
 export async function getAppointmentForExamination(appointmentId: string, doctorId: string) {

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireRole } from "@/lib/rbac";
 import { db } from "@/lib/db";
+import { jakartaTodayStr, parseDateOnlyUtc } from "@/lib/date";
 import { type ActionResult, firstErrors } from "@/lib/action-result";
 import {
   updateScheduleSchema,
@@ -212,24 +213,47 @@ export async function saveSoapRecordAction(
         throw new Error("PHARMACY_LOCKED");
       }
 
-      // 2. Validasi stok obat di inventaris
+      // 2. Validasi stok obat yang siap diserahkan (batch aktif, belum kedaluwarsa, & sudah diverifikasi)
       if (prescriptions && prescriptions.length > 0) {
-        const medicineIds = prescriptions.map((p) => p.medicineId);
+        const requestedTotals = new Map<string, number>();
+        for (const item of prescriptions) {
+          requestedTotals.set(
+            item.medicineId,
+            (requestedTotals.get(item.medicineId) ?? 0) + item.quantity,
+          );
+        }
+
+        const todayUtc = parseDateOnlyUtc(jakartaTodayStr());
+        const medicineIds = [...requestedTotals.keys()];
         const medicinesInDb = await tx.medicine.findMany({
           where: { id: { in: medicineIds } },
+          include: {
+            batches: {
+              where: {
+                quantity: { gt: 0 },
+                expiryDate: { gte: todayUtc },
+                batchNumber: { not: "LEGACY-PERLU-VERIFIKASI" },
+              },
+              select: { quantity: true },
+            },
+          },
         });
         const medMap = new Map(medicinesInDb.map((m) => [m.id, m]));
 
-        for (const item of prescriptions) {
-          const med = medMap.get(item.medicineId);
+        for (const [medicineId, totalQty] of requestedTotals.entries()) {
+          const med = medMap.get(medicineId);
           if (!med) {
-            throw new Error(`MEDICINE_NOT_FOUND:${item.medicineId}`);
+            throw new Error(`MEDICINE_NOT_FOUND:${medicineId}`);
           }
           if (!med.isActive) {
             throw new Error(`MEDICINE_INACTIVE:${med.name}`);
           }
-          if (markCompleted && med.stock < item.quantity) {
-            throw new Error(`INSUFFICIENT_STOCK:${med.name}:${med.stock}:${item.quantity}`);
+          const dispensableStock = Math.min(
+            med.stock,
+            med.batches.reduce((sum, b) => sum + b.quantity, 0),
+          );
+          if (markCompleted && dispensableStock < totalQty) {
+            throw new Error(`INSUFFICIENT_STOCK:${med.name}:${dispensableStock}:${totalQty}`);
           }
         }
       }

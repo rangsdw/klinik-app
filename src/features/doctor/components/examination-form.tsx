@@ -201,25 +201,30 @@ export function ExaminationForm({
     } catch { }
 
     try {
-      const savedDraft = localStorage.getItem(`draft_exam_${appointment.id}`);
-      if (savedDraft) {
-        const d = JSON.parse(savedDraft);
-        if (d.subjective !== undefined) setSubjective(d.subjective);
-        if (d.objective !== undefined) setObjective(d.objective);
-        if (d.assessment !== undefined) setAssessment(d.assessment);
-        if (d.plan !== undefined) setPlan(d.plan);
-        if (d.bloodPressure !== undefined) setBloodPressure(d.bloodPressure);
-        if (d.bodyTemperature !== undefined) setBodyTemperature(d.bodyTemperature);
-        if (d.bodyWeight !== undefined) setBodyWeight(d.bodyWeight);
-        if (d.pulseRate !== undefined) setPulseRate(d.pulseRate);
-        if (d.prescriptions !== undefined) setPrescriptions(d.prescriptions);
-        setDraftRestored(true);
+      if (isPharmacyLocked) {
+        localStorage.removeItem(`draft_exam_${appointment.id}`);
+      } else {
+        const savedDraft = localStorage.getItem(`draft_exam_${appointment.id}`);
+        if (savedDraft) {
+          const d = JSON.parse(savedDraft);
+          if (d.subjective !== undefined) setSubjective(d.subjective);
+          if (d.objective !== undefined) setObjective(d.objective);
+          if (d.assessment !== undefined) setAssessment(d.assessment);
+          if (d.plan !== undefined) setPlan(d.plan);
+          if (d.bloodPressure !== undefined) setBloodPressure(d.bloodPressure);
+          if (d.bodyTemperature !== undefined) setBodyTemperature(d.bodyTemperature);
+          if (d.bodyWeight !== undefined) setBodyWeight(d.bodyWeight);
+          if (d.pulseRate !== undefined) setPulseRate(d.pulseRate);
+          if (d.prescriptions !== undefined) setPrescriptions(d.prescriptions);
+          setDraftRestored(true);
+        }
       }
     } catch { }
-  }, [appointment.id, appointment.patient.name, appointment.queueNumber]);
+  }, [appointment.id, appointment.patient.name, appointment.queueNumber, isPharmacyLocked]);
 
-  // Autosave draft whenever fields change
+  // Autosave draft whenever fields change (abaikan bila resep sudah dikunci farmasi)
   useEffect(() => {
+    if (isPharmacyLocked) return;
     try {
       const draftData = {
         subjective,
@@ -236,6 +241,7 @@ export function ExaminationForm({
     } catch { }
   }, [
     appointment.id,
+    isPharmacyLocked,
     subjective,
     objective,
     assessment,

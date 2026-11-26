@@ -1,12 +1,19 @@
 "use server";
 
 import { db } from "@/lib/db";
+import { jakartaTodayStr, parseDateOnlyUtc } from "@/lib/date";
 import { requireStaffType } from "@/lib/rbac";
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 const base = "/staf/farmasi/obat";
+function revalidateInventoryAndDoctorPages() {
+  revalidatePath(base);
+  revalidatePath("/staf/farmasi");
+  revalidatePath("/dokter/obat");
+  revalidatePath("/dokter/periksa");
+}
 const formText = (fd: FormData, key: string, max = 150) => String(fd.get(key) ?? "").trim().slice(0, max);
 const number = (fd: FormData, key: string) => Number(fd.get(key));
 function errorMessage(error: unknown) {
@@ -36,7 +43,7 @@ export async function saveMedicine(fd: FormData): Promise<void> {
   } catch (e) {
     redirect(`${base}?error=${e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002" ? "duplicate" : errorMessage(e)}`);
   }
-  revalidatePath(base);
+  revalidateInventoryAndDoctorPages();
   redirect(`${base}?success=1`);
 }
 
@@ -46,7 +53,7 @@ export async function setMedicineActive(fd: FormData): Promise<void> {
   const active = formText(fd, "active") === "yes";
   if (!id) redirect(`${base}?error=invalid`);
   await db.medicine.updateMany({ where: { id }, data: { isActive: active } });
-  revalidatePath(base);
+  revalidateInventoryAndDoctorPages();
   redirect(`${base}?success=1`);
 }
 
@@ -58,7 +65,7 @@ export async function receiveStock(fd: FormData): Promise<void> {
   const quantity = number(fd, "quantity");
   const note = formText(fd, "note", 255);
   const expiryDate = new Date(`${expiryText}T00:00:00.000Z`);
-  if (!medicineId || !batchNumber || !/^\d{4}-\d{2}-\d{2}$/.test(expiryText) || Number.isNaN(expiryDate.getTime()) || expiryDate.toISOString().slice(0, 10) !== expiryText || expiryDate <= new Date(new Date().toISOString().slice(0, 10) + "T00:00:00.000Z") || !Number.isSafeInteger(quantity) || quantity <= 0 || quantity > 1000000) redirect(`${base}?error=invalid`);
+  if (!medicineId || !batchNumber || !/^\d{4}-\d{2}-\d{2}$/.test(expiryText) || Number.isNaN(expiryDate.getTime()) || expiryDate.toISOString().slice(0, 10) !== expiryText || expiryDate <= parseDateOnlyUtc(jakartaTodayStr()) || !Number.isSafeInteger(quantity) || quantity <= 0 || quantity > 1000000) redirect(`${base}?error=invalid`);
   try {
     await db.$transaction(async tx => {
       const medicine = await tx.medicine.findFirst({ where: { id: medicineId, isActive: true } });
@@ -73,7 +80,6 @@ export async function receiveStock(fd: FormData): Promise<void> {
       await tx.stockLog.create({ data: { medicineId, batchId: batch.id, type: "IN", quantity, balanceAfter: updated.stock, actorId: user.id, note: note || "Penerimaan stok" } });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (e) { redirect(`${base}?error=${errorMessage(e)}`); }
-  revalidatePath(base);
-  revalidatePath("/staf/farmasi");
+  revalidateInventoryAndDoctorPages();
   redirect(`${base}?success=1`);
 }

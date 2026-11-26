@@ -15,6 +15,7 @@ import {
   Search,
 } from "lucide-react";
 import { db } from "@/lib/db";
+import { jakartaTodayStr, parseDateOnlyUtc } from "@/lib/date";
 import { requireStaffType } from "@/lib/rbac";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -57,10 +58,10 @@ export default async function InventoryPage({
   });
 
   const edit = p.edit ? await db.medicine.findUnique({ where: { id: p.edit } }) : null;
-  const now = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
+  const now = parseDateOnlyUtc(jakartaTodayStr());
   const soon = new Date(now.getTime() + 30 * 86400000);
 
-  const lowStockCount = medicines.filter((m) => m.stock <= m.minimumStock).length;
+  const lowStockCount = medicines.filter((m) => m.isActive && m.stock <= m.minimumStock).length;
   const expiringCount = medicines
     .flatMap((m) => m.batches)
     .filter((b) => b.expiryDate <= soon && b.batchNumber !== "LEGACY-PERLU-VERIFIKASI").length;

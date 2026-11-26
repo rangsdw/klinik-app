@@ -57,7 +57,7 @@ export default async function DoctorMedicinesPage() {
               <TableBody>
                 {medicines.map((m) => {
                   const isOutOfStock = m.stock <= 0;
-                  const isLowStock = m.stock > 0 && m.stock <= 10;
+                  const isLowStock = m.stock > 0 && m.stock <= m.minimumStock;
 
                   return (
                     <TableRow key={m.id} className="border-line hover:bg-paper/40">

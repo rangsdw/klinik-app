@@ -1,6 +1,7 @@
 "use server";
 
 import { db } from "@/lib/db";
+import { jakartaTodayStr, parseDateOnlyUtc } from "@/lib/date";
 import { requireStaffType } from "@/lib/rbac";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -31,7 +32,7 @@ export async function advancePrescription(formData: FormData): Promise<void> {
           totals.set(item.medicineId, (totals.get(item.medicineId) ?? 0) + item.quantity);
         }
         for (const [medicineId, quantity] of [...totals.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-          const batches = await tx.medicineBatch.findMany({ where: { medicineId, quantity: { gt: 0 }, expiryDate: { gte: new Date(new Date().toISOString().slice(0, 10) + "T00:00:00.000Z") } }, orderBy: [{ expiryDate: "asc" }, { receivedAt: "asc" }, { id: "asc" }] });
+          const batches = await tx.medicineBatch.findMany({ where: { medicineId, quantity: { gt: 0 }, expiryDate: { gte: parseDateOnlyUtc(jakartaTodayStr()) } }, orderBy: [{ expiryDate: "asc" }, { receivedAt: "asc" }, { id: "asc" }] });
           // Data migrasi lama harus diverifikasi sebelum dipakai untuk dispensing.
           if (batches.filter(b => b.batchNumber !== "LEGACY-PERLU-VERIFIKASI").reduce((sum, b) => sum + b.quantity, 0) < quantity && batches.some(b => b.batchNumber === "LEGACY-PERLU-VERIFIKASI")) throw new Error("legacy");
           if (batches.reduce((sum, b) => sum + b.quantity, 0) < quantity) throw new Error("stock");
@@ -55,5 +56,9 @@ export async function advancePrescription(formData: FormData): Promise<void> {
     error = e instanceof Error && ["state", "stock", "quantity", "legacy"].includes(e.message) ? e.message : "retry";
   }
   revalidatePath(route);
+  revalidatePath("/staf/farmasi/obat");
+  revalidatePath("/dokter/obat");
+  revalidatePath("/dokter/periksa");
+  revalidatePath("/dokter");
   redirect(error ? `${route}?error=${error}` : `${route}?success=1`);
 }

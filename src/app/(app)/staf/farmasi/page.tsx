@@ -75,7 +75,7 @@ export default async function PharmacyPage({
   const q = typeof params.q === "string" ? params.q.trim().slice(0, 120) : "";
   const status = STATUSES.find((s) => s === params.status);
 
-  const [counts, records, lowStock] = await Promise.all([
+  const [counts, records, activeMedicines] = await Promise.all([
     db.medicalRecord.groupBy({
       by: ["pharmacyStatus"],
       where: { prescriptions: { some: {} }, appointment: { status: "COMPLETED" } },
@@ -115,8 +115,12 @@ export default async function PharmacyPage({
         },
       },
     }),
-    db.medicine.count({ where: { isActive: true, stock: { lte: 10 } } }),
+    db.medicine.findMany({
+      where: { isActive: true },
+      select: { stock: true, minimumStock: true },
+    }),
   ]);
+  const lowStock = activeMedicines.filter((m) => m.stock <= m.minimumStock).length;
 
   return (
     <div className="space-y-6">
@@ -201,7 +205,7 @@ export default async function PharmacyPage({
             <AlertTriangle aria-hidden="true" className="text-warning-ink size-5 shrink-0" />
           </div>
           <p className="tabular text-ink-strong text-3xl font-bold">{lowStock}</p>
-          <p className="text-ink-muted text-xs">Obat aktif dengan stok 10 ke bawah</p>
+          <p className="text-ink-muted text-xs">Obat aktif di bawah / sama dengan stok minimum</p>
         </Link>
       </div>
 
