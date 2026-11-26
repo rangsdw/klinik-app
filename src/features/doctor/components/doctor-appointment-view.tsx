@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { setAppointmentStatusAction } from "../actions";
+import { startExaminationAction } from "../actions";
 import { EditScheduleDialog } from "./edit-schedule-dialog";
 import type { AppointmentStatus } from "@prisma/client";
 import type { SerializedMedicine } from "../queries";
@@ -34,6 +34,9 @@ type AppointmentItem = {
   queueNumber: number | null;
   status: AppointmentStatus;
   chiefComplaint: string | null;
+  checkedInAt?: Date | null;
+  calledAt?: Date | null;
+  source?: "ONLINE" | "WALK_IN";
   patient: {
     id: string;
     name: string;
@@ -46,6 +49,8 @@ type AppointmentItem = {
     phone: string | null;
   };
   medicalRecord: {
+    pharmacyStatus?: "WAITING" | "PROCESSING" | "READY" | "DISPENSED" | null;
+    pharmacyDispensedAt?: Date | null;
     subjective: string | null;
     objective: string | null;
     assessment: string | null;
@@ -93,7 +98,7 @@ export function DoctorAppointmentView({
 
   async function handleStartExam(id: string) {
     try {
-      const res = await setAppointmentStatusAction(id, "IN_PROGRESS");
+      const res = await startExaminationAction(id);
       if (res.ok) {
         toast.success(res.message);
         router.refresh();
@@ -256,6 +261,16 @@ export function DoctorAppointmentView({
                               {item.patient.medicalRecordNumber}
                             </span>
                             {statusBadge(item.status)}
+                            {item.checkedInAt && (
+                              <Badge variant="outline" className="bg-emerald-50 text-emerald-800 border-emerald-200 text-[10px]">
+                                Hadir
+                              </Badge>
+                            )}
+                            {item.source === "WALK_IN" && (
+                              <Badge variant="outline" className="bg-amber-50 text-amber-800 border-amber-200 text-[10px]">
+                                Walk-in
+                              </Badge>
+                            )}
                           </div>
 
                           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-soft">
@@ -328,6 +343,30 @@ export function DoctorAppointmentView({
                                 <Pill className="size-3 text-primary-700" />
                                 E-Resep: {prescriptionsCount} Macam Obat
                               </span>
+                              {rec?.pharmacyStatus && (
+                                <Badge
+                                  variant="outline"
+                                  className={
+                                    rec.pharmacyStatus === "DISPENSED"
+                                      ? "bg-emerald-50 text-emerald-800 border-emerald-300 text-[10px]"
+                                      : rec.pharmacyStatus === "READY"
+                                      ? "bg-indigo-50 text-indigo-800 border-indigo-300 text-[10px]"
+                                      : rec.pharmacyStatus === "PROCESSING"
+                                      ? "bg-blue-50 text-blue-800 border-blue-300 text-[10px]"
+                                      : "bg-amber-50 text-amber-800 border-amber-300 text-[10px]"
+                                  }
+                                >
+                                  Farmasi: {
+                                    rec.pharmacyStatus === "DISPENSED"
+                                      ? "Obat Selesai Diserahkan"
+                                      : rec.pharmacyStatus === "READY"
+                                      ? "Siap Diserahkan"
+                                      : rec.pharmacyStatus === "PROCESSING"
+                                      ? "Sedang Diracik"
+                                      : "Menunggu Antrean"
+                                  }
+                                </Badge>
+                              )}
                               {rec?.prescriptions.map((pr) => (
                                 <span
                                   key={pr.medicineId}

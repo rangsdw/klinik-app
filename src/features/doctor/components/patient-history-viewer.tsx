@@ -50,6 +50,7 @@ type PatientItem = {
     doctor: { name: string };
     medicalRecord: {
       id: string;
+      pharmacyStatus?: "WAITING" | "PROCESSING" | "READY" | "DISPENSED" | null;
       subjective: string | null;
       objective: string | null;
       assessment: string | null;
@@ -446,9 +447,35 @@ export function PatientHistoryViewer({ initialPatients, searchQuery }: Props) {
 
               {/* Resep Obat Elektronik */}
               <div className="rounded-xl border border-line p-3 space-y-2">
-                <div className="flex items-center gap-1.5 text-xs font-semibold text-ink-strong">
-                  <Pill className="size-3.5 text-primary-600" />
-                  <span>Resep Obat yang Diberikan (E-Resep)</span>
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-ink-strong">
+                    <Pill className="size-3.5 text-primary-600" />
+                    <span>Resep Obat yang Diberikan (E-Resep)</span>
+                  </div>
+                  {viewingAppointment.medicalRecord.pharmacyStatus && (
+                    <Badge
+                      variant="outline"
+                      className={
+                        viewingAppointment.medicalRecord.pharmacyStatus === "DISPENSED"
+                          ? "bg-emerald-50 text-emerald-800 border-emerald-300 text-[10px]"
+                          : viewingAppointment.medicalRecord.pharmacyStatus === "READY"
+                          ? "bg-indigo-50 text-indigo-800 border-indigo-300 text-[10px]"
+                          : viewingAppointment.medicalRecord.pharmacyStatus === "PROCESSING"
+                          ? "bg-blue-50 text-blue-800 border-blue-300 text-[10px]"
+                          : "bg-amber-50 text-amber-800 border-amber-300 text-[10px]"
+                      }
+                    >
+                      Status Farmasi: {
+                        viewingAppointment.medicalRecord.pharmacyStatus === "DISPENSED"
+                          ? "Obat Selesai Diserahkan"
+                          : viewingAppointment.medicalRecord.pharmacyStatus === "READY"
+                          ? "Siap Diserahkan"
+                          : viewingAppointment.medicalRecord.pharmacyStatus === "PROCESSING"
+                          ? "Sedang Diracik"
+                          : "Menunggu Antrean Farmasi"
+                      }
+                    </Badge>
+                  )}
                 </div>
                 {viewingAppointment.medicalRecord.prescriptions.length === 0 ? (
                   <p className="text-xs text-ink-muted italic">Tidak ada resep obat.</p>

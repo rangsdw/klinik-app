@@ -9,6 +9,7 @@ export type SerializedMedicine = {
   dosageForm: string;
   unit: string;
   stock: number;
+  minimumStock: number;
   price: number;
   isActive: boolean;
   createdAt: Date;
@@ -62,6 +63,7 @@ export async function getDoctorAppointments(doctorId: string, dateStr?: string) 
             medicine: {
               ...p.medicine,
               price: Number(p.medicine.price),
+              minimumStock: p.medicine.minimumStock ?? 10,
             },
           })),
         }
@@ -152,6 +154,7 @@ export async function getPatientsWithHistory(searchQuery?: string) {
               medicine: {
                 ...p.medicine,
                 price: Number(p.medicine.price),
+                minimumStock: p.medicine.minimumStock ?? 10,
               },
             })),
           }
@@ -169,6 +172,7 @@ export async function getMedicinesList(): Promise<SerializedMedicine[]> {
   return medicines.map((m) => ({
     ...m,
     price: Number(m.price),
+    minimumStock: m.minimumStock ?? 10,
   }));
 }
 
@@ -179,7 +183,30 @@ export async function getAppointmentForExamination(appointmentId: string, doctor
       doctorId,
     },
     include: {
-      patient: true,
+      patient: {
+        include: {
+          appointments: {
+            where: {
+              id: { not: appointmentId },
+              medicalRecord: { isNot: null },
+            },
+            include: {
+              doctor: { select: { name: true } },
+              medicalRecord: {
+                include: {
+                  prescriptions: {
+                    include: {
+                      medicine: true,
+                    },
+                  },
+                },
+              },
+            },
+            orderBy: { appointmentDate: "desc" },
+            take: 5,
+          },
+        },
+      },
       medicalRecord: {
         include: {
           prescriptions: {
@@ -196,6 +223,25 @@ export async function getAppointmentForExamination(appointmentId: string, doctor
 
   return {
     ...appointment,
+    patient: {
+      ...appointment.patient,
+      appointments: appointment.patient.appointments.map((pastApp) => ({
+        ...pastApp,
+        medicalRecord: pastApp.medicalRecord
+          ? {
+              ...pastApp.medicalRecord,
+              prescriptions: pastApp.medicalRecord.prescriptions.map((p) => ({
+                ...p,
+                medicine: {
+                  ...p.medicine,
+                  price: Number(p.medicine.price),
+                  minimumStock: p.medicine.minimumStock ?? 10,
+                },
+              })),
+            }
+          : null,
+      })),
+    },
     medicalRecord: appointment.medicalRecord
       ? {
           ...appointment.medicalRecord,
@@ -204,6 +250,7 @@ export async function getAppointmentForExamination(appointmentId: string, doctor
             medicine: {
               ...p.medicine,
               price: Number(p.medicine.price),
+              minimumStock: p.medicine.minimumStock ?? 10,
             },
           })),
         }

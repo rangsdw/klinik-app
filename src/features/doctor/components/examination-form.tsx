@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import {
   ArrowLeft,
   ArrowRight,
-  AlertCircle,
+  AlertTriangle,
   Plus,
   Minus,
   Trash2,
@@ -19,6 +19,10 @@ import {
   User,
   Calendar,
   Search,
+  History,
+  PackageCheck,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -56,8 +60,40 @@ type Props = {
       allergies: string | null;
       specialConditions: string | null;
       phone: string | null;
+      appointments?: {
+        id: string;
+        appointmentDate: Date;
+        startTime: string;
+        endTime: string;
+        doctor: { name: string };
+        medicalRecord: {
+          id: string;
+          subjective: string | null;
+          objective: string | null;
+          assessment: string | null;
+          plan: string | null;
+          bloodPressure: string | null;
+          bodyTemperature: number | null;
+          bodyWeight: number | null;
+          pulseRate: number | null;
+          createdAt: Date;
+          pharmacyStatus?: string | null;
+          prescriptions: {
+            id: string;
+            quantity: number;
+            dosageInstructions: string;
+            notes: string | null;
+            medicine: SerializedMedicine;
+          }[];
+        } | null;
+      }[];
     };
     medicalRecord?: {
+      id?: string;
+      pharmacyStatus?: "WAITING" | "PROCESSING" | "READY" | "DISPENSED" | null;
+      pharmacyReceivedAt?: Date | null;
+      pharmacyReadyAt?: Date | null;
+      pharmacyDispensedAt?: Date | null;
       subjective: string | null;
       objective: string | null;
       assessment: string | null;
@@ -133,6 +169,22 @@ export function ExaminationForm({
   const [markCompleted, setMarkCompleted] = useState(true);
   const [loading, setLoading] = useState(false);
   const [draftRestored, setDraftRestored] = useState(false);
+  const [showPastHistory, setShowPastHistory] = useState(false);
+
+  const pharmacyStatus = rec?.pharmacyStatus;
+  const isPharmacyLocked = Boolean(pharmacyStatus && pharmacyStatus !== "WAITING");
+  const pastAppointments = appointment.patient.appointments || [];
+
+  const patientAllergies = (appointment.patient.allergies || "").toLowerCase();
+  function checkAllergyRisk(medName: string) {
+    if (!patientAllergies.trim()) return false;
+    const keywords = patientAllergies
+      .split(/[,;\s]+/)
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.length >= 3);
+    const lowerName = medName.toLowerCase();
+    return keywords.some((kw) => lowerName.includes(kw));
+  }
 
   // Set active exam in localStorage for sidebar indication and restore draft
   useEffect(() => {
@@ -209,12 +261,20 @@ export function ExaminationForm({
   });
 
   function handleAddMedicine(med: SerializedMedicine) {
+    if (isPharmacyLocked) {
+      toast.error("Resep telah diproses farmasi dan terkunci.");
+      return;
+    }
     if (med.stock <= 0) {
       toast.error(`Stok ${med.name} saat ini kosong.`);
       return;
     }
     const existingIdx = prescriptions.findIndex((p) => p.medicineId === med.id);
     if (existingIdx >= 0) {
+      if (prescriptions[existingIdx].quantity >= med.stock) {
+        toast.warning(`Jumlah telah mencapai stok maksimum yang tersedia (${med.stock} ${med.unit}).`);
+        return;
+      }
       updatePrescriptionRow(existingIdx, "quantity", prescriptions[existingIdx].quantity + 1);
       toast.success(`Jumlah ${med.name} ditambah (x${prescriptions[existingIdx].quantity + 1}).`);
     } else {
@@ -231,8 +291,8 @@ export function ExaminationForm({
     }
   }
 
-
   function removePrescriptionRow(index: number) {
+    if (isPharmacyLocked) return;
     setPrescriptions((prev) => prev.filter((_, i) => i !== index));
   }
 
@@ -241,6 +301,7 @@ export function ExaminationForm({
     field: K,
     value: PrescriptionRow[K],
   ) {
+    if (isPharmacyLocked) return;
     setPrescriptions((prev) => {
       const copy = [...prev];
       copy[index] = { ...copy[index], [field]: value };
@@ -250,6 +311,35 @@ export function ExaminationForm({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (isPharmacyLocked) {
+      toast.error("Resep sedang diproses/telah diserahkan farmasi dan tidak dapat diubah.");
+      return;
+    }
+
+    // Validasi alur: diagnosis (assessment) wajib diisi jika menyelesaikan sesi pemeriksaan
+    if (markCompleted && (!assessment || !assessment.trim())) {
+      toast.error("Diagnosis (Assessment / ICD-10) wajib diisi sebelum menyelesaikan pemeriksaan pasien.");
+      setActiveTab("soap");
+      return;
+    }
+
+    // Validasi resep: jika ada obat yang ditambahkan, aturan pakai wajib terisi
+    if (prescriptions.length > 0) {
+      for (const p of prescriptions) {
+        const med = availableMedicines.find((m) => m.id === p.medicineId);
+        if (!p.dosageInstructions.trim()) {
+          toast.error(`Aturan pakai untuk ${med?.name || "obat"} belum diisi.`);
+          setActiveTab("prescription");
+          return;
+        }
+        if (p.quantity <= 0) {
+          toast.error(`Jumlah untuk ${med?.name || "obat"} minimal 1.`);
+          setActiveTab("prescription");
+          return;
+        }
+      }
+    }
+
     setLoading(true);
     try {
       const res = await saveSoapRecordAction({
@@ -322,6 +412,21 @@ export function ExaminationForm({
         </div>
       </div>
 
+      {/* Pharmacy Lock Warning Banner */}
+      {isPharmacyLocked && (
+        <div className="rounded-xl border border-blue-200 bg-blue-50/80 p-4 text-xs text-blue-900 flex items-start gap-3">
+          <PackageCheck className="size-5 text-blue-700 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <h4 className="font-bold text-blue-900">
+              STATUS RESEP DI FARMASI: {pharmacyStatus === "PROCESSING" ? "SEDANG DIRACIK" : pharmacyStatus === "READY" ? "SIAP DISERAHKAN" : "OBAT SELESAI DISERAHKAN"}
+            </h4>
+            <p>
+              Resep ini sedang diproses atau telah diserahkan oleh staf farmasi. Pengubahan resep dan catatan rekam medis dikunci untuk mencegah inkonsistensi stok dan etiket obat.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Patient Information Card */}
       <Card className="border-line bg-surface">
         <CardContent className="p-5">
@@ -382,7 +487,7 @@ export function ExaminationForm({
           {(appointment.patient.allergies || appointment.patient.specialConditions) && (
             <div className="mt-4 rounded-xl border border-danger/30 bg-danger-soft p-3 text-sm text-danger-ink">
               <div className="flex items-start gap-2">
-                <AlertCircle className="size-4 shrink-0 mt-0.5 text-danger" />
+                <AlertTriangle className="size-4 shrink-0 mt-0.5 text-danger" />
                 <div>
                   <p className="font-bold">Perhatian Khusus Medis (Red Flag):</p>
                   {appointment.patient.allergies && (
@@ -403,6 +508,82 @@ export function ExaminationForm({
           )}
         </CardContent>
       </Card>
+
+      {/* Riwayat Kunjungan Sebelumnya */}
+      {pastAppointments.length > 0 && (
+        <Card className="border-line bg-surface">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <History className="size-4 text-primary-700" />
+                <h3 className="text-sm font-semibold text-ink-strong">
+                  Riwayat Medis Pasien Sebelumnya ({pastAppointments.length} Kunjungan Terakhir)
+                </h3>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowPastHistory(!showPastHistory)}
+                className="text-xs text-primary-700 hover:bg-primary-50 h-8 gap-1"
+              >
+                <span>{showPastHistory ? "Tutup Riwayat" : "Lihat Riwayat"}</span>
+                {showPastHistory ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+              </Button>
+            </div>
+
+            {showPastHistory && (
+              <div className="mt-4 space-y-3 pt-3 border-t border-line">
+                {pastAppointments.map((past) => {
+                  const pastRec = past.medicalRecord;
+                  if (!pastRec) return null;
+                  return (
+                    <div key={past.id} className="rounded-lg border border-line bg-paper/60 p-3.5 space-y-2 text-xs">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <span className="font-semibold text-ink-strong">
+                          {new Date(past.appointmentDate).toLocaleDateString("id-ID", {
+                            day: "numeric",
+                            month: "long",
+                            year: "numeric",
+                          })} · dr. {past.doctor.name}
+                        </span>
+                        {pastRec.pharmacyStatus && (
+                          <Badge variant="outline" className="text-[10px] bg-surface">
+                            Farmasi: {pastRec.pharmacyStatus === "DISPENSED" ? "Obat Diserahkan" : pastRec.pharmacyStatus}
+                          </Badge>
+                        )}
+                      </div>
+
+                      {pastRec.assessment && (
+                        <p className="text-ink-strong">
+                          <span className="font-semibold text-primary-800">Diagnosis:</span> {pastRec.assessment}
+                        </p>
+                      )}
+
+                      {pastRec.plan && (
+                        <p className="text-ink-soft">
+                          <span className="font-medium text-ink-strong">Tindakan:</span> {pastRec.plan}
+                        </p>
+                      )}
+
+                      {pastRec.prescriptions && pastRec.prescriptions.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                          <span className="font-medium text-ink-muted">Obat:</span>
+                          {pastRec.prescriptions.map((pr) => (
+                            <span key={pr.id} className="rounded bg-surface px-2 py-0.5 border border-line text-[11px] text-ink-soft">
+                              {pr.medicine.name} (x{pr.quantity}) · {pr.dosageInstructions}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Main Form: SOAP & E-Resep */}
       <form onSubmit={handleSubmit} className="space-y-6">
@@ -617,21 +798,30 @@ export function ExaminationForm({
                       filteredMedicines.map((med) => {
                         const isAdded = prescriptions.some((p) => p.medicineId === med.id);
                         const isOutOfStock = med.stock <= 0;
-                        const isLowStock = med.stock > 0 && med.stock <= 10;
+                        const isLowStock = med.stock > 0 && med.stock <= (med.minimumStock || 10);
+                        const isAllergyRisk = checkAllergyRisk(med.name);
 
                         return (
                           <div
                             key={med.id}
-                            className={`flex items-center justify-between gap-2 rounded-xl p-3 border transition-all ${isAdded
-                              ? "border-primary-300 bg-primary-50/50"
-                              : "border-line bg-surface hover:border-line-strong hover:bg-paper/40"
-                              }`}
+                            className={`flex items-center justify-between gap-2 rounded-xl p-3 border transition-all ${
+                              isAllergyRisk
+                                ? "border-danger/40 bg-danger-soft/20"
+                                : isAdded
+                                ? "border-primary-300 bg-primary-50/50"
+                                : "border-line bg-surface hover:border-line-strong hover:bg-paper/40"
+                            }`}
                           >
                             <div className="min-w-0 flex-1 space-y-1">
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <h4 className="font-semibold text-ink-strong text-xs truncate">
                                   {med.name}
                                 </h4>
+                                {isAllergyRisk && (
+                                  <Badge className="bg-danger-soft text-danger-ink border border-danger/30 text-[9px] px-1.5 py-0">
+                                    ⚠️ Risiko Alergi
+                                  </Badge>
+                                )}
                                 {isAdded && (
                                   <Badge className="bg-primary-100 text-primary-800 text-[9px] px-1.5 py-0 border-0">
                                     Dipilih
@@ -642,18 +832,22 @@ export function ExaminationForm({
                               <div className="flex items-center gap-2 text-[11px] text-ink-muted">
                                 <span>{med.dosageForm}</span>
                                 <span>·</span>
+                                <span>Rp {med.price.toLocaleString("id-ID")}</span>
+                                <span>·</span>
                                 <span
                                   className={
                                     isOutOfStock
                                       ? "text-danger-ink font-semibold"
                                       : isLowStock
-                                        ? "text-warning-ink font-medium"
-                                        : "text-success-ink font-medium"
+                                      ? "text-warning-ink font-semibold"
+                                      : "text-success-ink font-medium"
                                   }
                                 >
                                   {isOutOfStock
                                     ? "Stok Habis"
-                                    : `Stok: ${med.stock} ${med.unit}`}
+                                    : isLowStock
+                                    ? `Stok Menipis: ${med.stock} ${med.unit}`
+                                    : `Tersedia: ${med.stock} ${med.unit}`}
                                 </span>
                               </div>
                             </div>
@@ -662,7 +856,7 @@ export function ExaminationForm({
                               type="button"
                               size="sm"
                               variant={isAdded ? "secondary" : "outline"}
-                              disabled={isOutOfStock}
+                              disabled={isOutOfStock || isPharmacyLocked}
                               onClick={() => handleAddMedicine(med)}
                               className="h-8 text-xs shrink-0 gap-1"
                             >
@@ -715,11 +909,19 @@ export function ExaminationForm({
                             {/* Baris Atas: Nama Obat & Pengatur Kuantitas + Tombol Hapus */}
                             <div className="flex items-start justify-between gap-3 border-b border-line pb-2.5">
                               <div>
-                                <h4 className="font-bold text-ink-strong text-sm">
-                                  {selectedMed?.name || "Obat"}
-                                </h4>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <h4 className="font-bold text-ink-strong text-sm">
+                                    {selectedMed?.name || "Obat"}
+                                  </h4>
+                                  {selectedMed && checkAllergyRisk(selectedMed.name) && (
+                                    <Badge className="bg-danger-soft text-danger-ink border border-danger/30 text-[9px] px-1.5 py-0">
+                                      ⚠️ Risiko Alergi
+                                    </Badge>
+                                  )}
+                                </div>
                                 <p className="text-[11px] text-ink-muted">
                                   Sediaan: {selectedMed?.dosageForm} · Satuan: {selectedMed?.unit}
+                                  {selectedMed && ` · Sisa Stok: ${selectedMed.stock}`}
                                 </p>
                               </div>
 
@@ -728,6 +930,7 @@ export function ExaminationForm({
                                 <div className="flex items-center border border-line rounded-lg bg-paper">
                                   <button
                                     type="button"
+                                    disabled={isPharmacyLocked}
                                     onClick={() => {
                                       if (row.quantity > 1) {
                                         updatePrescriptionRow(idx, "quantity", row.quantity - 1);
@@ -735,7 +938,7 @@ export function ExaminationForm({
                                         removePrescriptionRow(idx);
                                       }
                                     }}
-                                    className="p-1.5 text-ink-muted hover:text-ink-strong transition-colors"
+                                    className="p-1.5 text-ink-muted hover:text-ink-strong transition-colors disabled:opacity-50"
                                     title="Kurangi"
                                   >
                                     <Minus className="size-3" />
@@ -743,20 +946,31 @@ export function ExaminationForm({
                                   <input
                                     type="number"
                                     min="1"
+                                    max={selectedMed?.stock || 999}
                                     value={row.quantity}
-                                    onChange={(e) =>
-                                      updatePrescriptionRow(
-                                        idx,
-                                        "quantity",
-                                        parseInt(e.target.value, 10) || 1,
-                                      )
-                                    }
-                                    className="w-10 bg-transparent text-center font-mono text-xs font-semibold text-ink-strong focus:outline-none"
+                                    disabled={isPharmacyLocked}
+                                    onChange={(e) => {
+                                      const maxStock = selectedMed?.stock || 999;
+                                      const raw = parseInt(e.target.value, 10) || 1;
+                                      const val = Math.max(1, Math.min(raw, maxStock));
+                                      if (raw > maxStock) {
+                                        toast.warning(`Jumlah dibatasi sesuai stok inventaris (${maxStock} ${selectedMed?.unit}).`);
+                                      }
+                                      updatePrescriptionRow(idx, "quantity", val);
+                                    }}
+                                    className="w-10 bg-transparent text-center font-mono text-xs font-semibold text-ink-strong focus:outline-none disabled:opacity-60"
                                   />
                                   <button
                                     type="button"
-                                    onClick={() => updatePrescriptionRow(idx, "quantity", row.quantity + 1)}
-                                    className="p-1.5 text-ink-muted hover:text-ink-strong transition-colors"
+                                    disabled={isPharmacyLocked || (selectedMed ? row.quantity >= selectedMed.stock : false)}
+                                    onClick={() => {
+                                      if (selectedMed && row.quantity >= selectedMed.stock) {
+                                        toast.warning(`Jumlah telah mencapai batas stok inventaris (${selectedMed.stock} ${selectedMed.unit}).`);
+                                        return;
+                                      }
+                                      updatePrescriptionRow(idx, "quantity", row.quantity + 1);
+                                    }}
+                                    className="p-1.5 text-ink-muted hover:text-ink-strong transition-colors disabled:opacity-40"
                                     title="Tambah"
                                   >
                                     <Plus className="size-3" />
@@ -767,8 +981,9 @@ export function ExaminationForm({
                                   type="button"
                                   variant="ghost"
                                   size="icon"
+                                  disabled={isPharmacyLocked}
                                   onClick={() => removePrescriptionRow(idx)}
-                                  className="h-8 w-8 text-danger hover:bg-danger-soft hover:text-danger"
+                                  className="h-8 w-8 text-danger hover:bg-danger-soft hover:text-danger disabled:opacity-50"
                                   title="Hapus Obat"
                                 >
                                   <Trash2 className="size-4" />
@@ -878,11 +1093,17 @@ export function ExaminationForm({
               </Button>
               <Button
                 type="submit"
-                disabled={loading}
-                className="gap-2 bg-primary-700 hover:bg-primary-800 text-surface"
+                disabled={loading || isPharmacyLocked}
+                className="gap-2 bg-primary-700 hover:bg-primary-800 text-surface disabled:opacity-50"
               >
                 <ClipboardCheck className="size-4" />
-                <span>{loading ? "Menyimpan Data..." : "Simpan Rekam Medis & E-Resep"}</span>
+                <span>
+                  {isPharmacyLocked
+                    ? "Terkunci oleh Farmasi"
+                    : loading
+                    ? "Menyimpan Data..."
+                    : "Simpan Rekam Medis & E-Resep"}
+                </span>
               </Button>
             </div>
           </CardContent>
