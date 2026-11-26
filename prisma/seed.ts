@@ -14,6 +14,7 @@ import {
   type BloodType,
 } from "@prisma/client";
 import { generateMedicalRecordNumber } from "../src/features/patients/mrn";
+import { addDaysToDateStr, jakartaTodayStr, parseDateOnlyUtc } from "../src/lib/date";
 
 if (process.env.NODE_ENV === "production") {
   console.error("Seeder menolak berjalan di NODE_ENV=production.");
@@ -141,21 +142,170 @@ async function main() {
 
   const counts = await db.user.groupBy({ by: ["role"], _count: { _all: true } });
 
-  // Seed Master Obat
+  const todayStr = jakartaTodayStr();
+  const today = parseDateOnlyUtc(todayStr);
+
+  const actorUser =
+    (await db.user.findUnique({ where: { email: "farmasi@klinik.test" }, select: { id: true } })) ??
+    (await db.user.findUniqueOrThrow({ where: { email: "admin@klinik.test" }, select: { id: true } }));
+
+  // Seed Master Obat & Batch Awal (FEFO-ready, idempoten)
   const MEDICINES = [
-    { code: "MED-001", name: "Paracetamol 500mg", category: "Analgesik & Antipiretik", dosageForm: "Tablet", unit: "Strip", stock: 120, price: 8000 },
-    { code: "MED-002", name: "Amoxicillin 500mg", category: "Antibiotik", dosageForm: "Kapsul", unit: "Strip", stock: 85, price: 15000 },
-    { code: "MED-003", name: "Cetirizine 10mg", category: "Antihistamin", dosageForm: "Tablet", unit: "Strip", stock: 60, price: 10000 },
-    { code: "MED-004", name: "Antasida Doen", category: "Antasida", dosageForm: "Tablet Kunyah", unit: "Strip", stock: 100, price: 6000 },
-    { code: "MED-005", name: "Amlodipine 5mg", category: "Antihipertensi", dosageForm: "Tablet", unit: "Strip", stock: 95, price: 18000 },
+    {
+      code: "MED-001",
+      name: "Paracetamol 500mg",
+      category: "Analgesik & Antipiretik",
+      dosageForm: "Tablet",
+      unit: "Strip",
+      stock: 120,
+      price: 8000,
+      batchNumber: "BATCH-MED001-A",
+      expiryDays: 365,
+    },
+    {
+      code: "MED-002",
+      name: "Amoxicillin 500mg",
+      category: "Antibiotik",
+      dosageForm: "Kapsul",
+      unit: "Strip",
+      stock: 85,
+      price: 15000,
+      batchNumber: "BATCH-MED002-A",
+      expiryDays: 300,
+    },
+    {
+      code: "MED-003",
+      name: "Cetirizine 10mg",
+      category: "Antihistamin",
+      dosageForm: "Tablet",
+      unit: "Strip",
+      stock: 60,
+      price: 10000,
+      batchNumber: "BATCH-MED003-A",
+      expiryDays: 240,
+    },
+    {
+      code: "MED-004",
+      name: "Antasida Doen",
+      category: "Antasida",
+      dosageForm: "Tablet Kunyah",
+      unit: "Strip",
+      stock: 100,
+      price: 6000,
+      batchNumber: "BATCH-MED004-A",
+      expiryDays: 420,
+    },
+    {
+      code: "MED-005",
+      name: "Amlodipine 5mg",
+      category: "Antihipertensi",
+      dosageForm: "Tablet",
+      unit: "Strip",
+      stock: 95,
+      price: 18000,
+      batchNumber: "BATCH-MED005-A",
+      expiryDays: 365,
+    },
   ];
 
   for (const m of MEDICINES) {
-    await db.medicine.upsert({
+    const med = await db.medicine.upsert({
       where: { code: m.code },
-      create: m,
-      update: { name: m.name, category: m.category, dosageForm: m.dosageForm, unit: m.unit, stock: m.stock, price: m.price },
+      create: {
+        code: m.code,
+        name: m.name,
+        category: m.category,
+        dosageForm: m.dosageForm,
+        unit: m.unit,
+        stock: 0,
+        price: m.price,
+      },
+      update: {
+        name: m.name,
+        category: m.category,
+        dosageForm: m.dosageForm,
+        unit: m.unit,
+        price: m.price,
+      },
     });
+
+    const batches = await db.medicineBatch.findMany({ where: { medicineId: med.id } });
+    const hasVerifiedBatch = batches.some((b) => b.batchNumber !== "LEGACY-PERLU-VERIFIKASI");
+
+    if (!hasVerifiedBatch) {
+      const expiryDate = parseDateOnlyUtc(addDaysToDateStr(todayStr, m.expiryDays));
+      const legacyBatch = batches.find((b) => b.batchNumber === "LEGACY-PERLU-VERIFIKASI");
+
+      await db.$transaction(async (tx) => {
+        if (legacyBatch) {
+          const targetQty =
+            legacyBatch.quantity === 0 && med.stock === 0 ? m.stock : legacyBatch.quantity;
+          const updatedBatch = await tx.medicineBatch.update({
+            where: { id: legacyBatch.id },
+            data: {
+              batchNumber: m.batchNumber,
+              expiryDate,
+              quantity: targetQty,
+            },
+          });
+
+          const totalBatchQty = await tx.medicineBatch.aggregate({
+            where: { medicineId: med.id },
+            _sum: { quantity: true },
+          });
+          const syncedStock = totalBatchQty._sum.quantity ?? 0;
+
+          const updatedMed = await tx.medicine.update({
+            where: { id: med.id },
+            data: { stock: syncedStock },
+          });
+
+          const existingLog = await tx.stockLog.findFirst({
+            where: { batchId: updatedBatch.id },
+            select: { id: true },
+          });
+          if (!existingLog && updatedBatch.quantity > 0) {
+            await tx.stockLog.create({
+              data: {
+                medicineId: med.id,
+                batchId: updatedBatch.id,
+                type: "IN",
+                quantity: updatedBatch.quantity,
+                balanceAfter: updatedMed.stock,
+                actorId: actorUser.id,
+                note: "Verifikasi stok awal demo (seed)",
+              },
+            });
+          }
+        } else {
+          const createdBatch = await tx.medicineBatch.create({
+            data: {
+              medicineId: med.id,
+              batchNumber: m.batchNumber,
+              expiryDate,
+              quantity: m.stock,
+            },
+          });
+
+          const updatedMed = await tx.medicine.update({
+            where: { id: med.id },
+            data: { stock: { increment: m.stock } },
+          });
+
+          await tx.stockLog.create({
+            data: {
+              medicineId: med.id,
+              batchId: createdBatch.id,
+              type: "IN",
+              quantity: m.stock,
+              balanceAfter: updatedMed.stock,
+              actorId: actorUser.id,
+              note: "Stok awal demo (seed)",
+            },
+          });
+        }
+      });
+    }
   }
 
   // Seed Data Appointment & Rekam Medis untuk Dokter 1
@@ -165,9 +315,6 @@ async function main() {
   const patientAlya = await db.patient.findFirst({ where: { name: "Alya Santoso", deletedAt: null } });
 
   if (doctor && patientBudi && patientSutrisno && patientAlya) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
     // Appointment 1: Sutrisno (COMPLETED dengan Rekam Medis & Resep)
     let app1 = await db.appointment.findFirst({
       where: { patientId: patientSutrisno.id, doctorId: doctor.id, queueNumber: 1 },
@@ -251,6 +398,17 @@ async function main() {
           chiefComplaint: "Batuk pilek dan bersin-bersin. (Alergi amoksisilin).",
         },
       });
+    }
+
+    // Sinkronkan counter antrean harian agar nomor antrean baru tidak bentrok dengan data seed
+    const maxQueueAgg = await db.appointment.aggregate({
+      where: { doctorId: doctor.id, appointmentDate: today },
+      _max: { queueNumber: true },
+    });
+    const maxQueue = maxQueueAgg._max.queueNumber ?? 0;
+    if (maxQueue > 0) {
+      const counterKey = `queue-${doctor.id}-${todayStr}`.slice(0, 64);
+      await db.$executeRaw`INSERT INTO counters (\`key\`, value) VALUES (${counterKey}, ${maxQueue}) ON DUPLICATE KEY UPDATE value = GREATEST(value, ${maxQueue})`;
     }
   }
 
