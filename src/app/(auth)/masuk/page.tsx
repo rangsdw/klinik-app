@@ -16,6 +16,10 @@ const STATUS: Record<string, { tone: "success" | "info"; text: string }> = {
     tone: "info",
     text: "Akun Anda sedang dinonaktifkan. Silakan hubungi petugas klinik.",
   },
+  sesi: {
+    tone: "info",
+    text: "Sesi Anda sudah berakhir atau tidak lagi valid. Silakan masuk kembali.",
+  },
 };
 
 export default async function LoginPage({

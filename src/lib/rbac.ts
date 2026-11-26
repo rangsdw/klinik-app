@@ -16,7 +16,8 @@ export type CurrentUser = {
 
 /**
  * Ambil user yang login beserta status terbaru dari database (role, staffType, isActive).
- * Di-cache per request. Akun yang dinonaktifkan di tengah sesi langsung dikeluarkan.
+ * Di-cache per request. Akun yang dinonaktifkan di tengah sesi atau sesi lama yang user-nya
+ * tidak ditemukan di DB langsung dikeluarkan lewat /keluar agar cookie dibersihkan.
  */
 export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   const session = await auth();
@@ -34,7 +35,7 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
       isActive: true,
     },
   });
-  if (!user) return null;
+  if (!user) redirect("/keluar?alasan=sesi");
   if (!user.isActive) redirect("/keluar?alasan=nonaktif");
   const { isActive: _ignored, ...rest } = user;
   void _ignored;
