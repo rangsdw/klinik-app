@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { Stethoscope, Clock, Users, ArrowRight } from "lucide-react";
 import { requireRole } from "@/lib/rbac";
 import { db } from "@/lib/db";
+import { jakartaTodayStr, parseDateOnlyUtc } from "@/lib/date";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,8 +14,7 @@ export const metadata: Metadata = { title: "Pemeriksaan Pasien · Dokter" };
 export default async function DoctorExaminationIndexPage() {
   const user = await requireRole("DOCTOR");
 
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
+  const today = parseDateOnlyUtc(jakartaTodayStr());
 
   // Cari janji temu hari ini yang sedang berlangsung (IN_PROGRESS)
   const inProgressApp = await db.appointment.findFirst({
@@ -31,12 +31,12 @@ export default async function DoctorExaminationIndexPage() {
     redirect(`/dokter/periksa/${inProgressApp.id}`);
   }
 
-  // Jika tidak ada yang IN_PROGRESS, cari antrean yang siap diperiksa (CONFIRMED / PENDING)
+  // Jika tidak ada yang IN_PROGRESS, cari antrean yang siap diperiksa (CONFIRMED)
   const waitingAppointments = await db.appointment.findMany({
     where: {
       doctorId: user.id,
       appointmentDate: today,
-      status: { in: ["CONFIRMED", "PENDING"] },
+      status: "CONFIRMED",
     },
     include: {
       patient: {
@@ -93,14 +93,24 @@ export default async function DoctorExaminationIndexPage() {
                     </div>
 
                     <div className="space-y-0.5">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="font-semibold text-ink-strong">{app.patient.name}</span>
                         <span className="font-mono text-xs text-ink-muted bg-paper px-1.5 py-0.5 rounded border border-line">
                           {app.patient.medicalRecordNumber}
                         </span>
                         <Badge variant="outline" className="text-[10px]">
-                          {app.status === "CONFIRMED" ? "Terkonfirmasi" : "Menunggu"}
+                          Terkonfirmasi
                         </Badge>
+                        {app.checkedInAt && (
+                          <Badge variant="outline" className="bg-emerald-50 text-emerald-800 border-emerald-200 text-[10px]">
+                            Hadir
+                          </Badge>
+                        )}
+                        {app.source === "WALK_IN" && (
+                          <Badge variant="outline" className="bg-amber-50 text-amber-800 border-amber-200 text-[10px]">
+                            Walk-in
+                          </Badge>
+                        )}
                       </div>
 
                       <div className="flex items-center gap-2 text-xs text-ink-muted">

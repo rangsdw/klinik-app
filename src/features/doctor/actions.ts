@@ -12,6 +12,19 @@ import {
 } from "./schemas";
 import { Prisma, type AppointmentStatus } from "@prisma/client";
 
+function revalidateDoctorAndQueuePages(appointmentId?: string) {
+  revalidatePath("/dokter");
+  revalidatePath("/dokter/periksa");
+  revalidatePath("/dokter/pasien");
+  revalidatePath("/staf/pendaftaran/antrean");
+  revalidatePath("/staf/pendaftaran");
+  revalidatePath("/pasien/antrean");
+  revalidatePath("/pasien");
+  if (appointmentId) {
+    revalidatePath(`/dokter/periksa/${appointmentId}`);
+  }
+}
+
 export async function updateScheduleAction(
   appointmentId: string,
   input: UpdateScheduleInput,
@@ -55,7 +68,7 @@ export async function updateScheduleAction(
     }
   });
 
-  revalidatePath("/dokter");
+  revalidateDoctorAndQueuePages(appointmentId);
   return { ok: true, message: "Jadwal appointment berhasil diperbarui." };
 }
 
@@ -89,7 +102,7 @@ export async function setAppointmentStatusAction(
     });
   });
 
-  revalidatePath("/dokter");
+  revalidateDoctorAndQueuePages(appointmentId);
   return { ok: true, message: `Status antrean diubah ke ${status}.` };
 }
 
@@ -104,8 +117,26 @@ export async function startExaminationAction(appointmentId: string): Promise<Act
     return { ok: false, message: "Janji temu tidak ditemukan atau akses ditolak." };
   }
 
-  if (appointment.status === "COMPLETED" || appointment.status === "CANCELLED") {
-    return { ok: false, message: `Status janji temu sudah ${appointment.status}.` };
+  if (appointment.status === "PENDING") {
+    return { ok: false, message: "Janji temu belum dikonfirmasi oleh staf pendaftaran." };
+  }
+
+  if (appointment.status === "IN_PROGRESS") {
+    if (!appointment.calledAt) {
+      await db.appointment.update({
+        where: { id: appointmentId },
+        data: { calledAt: new Date() },
+      });
+    }
+    revalidateDoctorAndQueuePages(appointmentId);
+    return { ok: true, message: `Pasien ${appointment.patient.name} sudah dalam pemeriksaan.` };
+  }
+
+  if (appointment.status !== "CONFIRMED") {
+    return {
+      ok: false,
+      message: `Status janji temu sudah ${appointment.status} dan tidak dapat dipanggil.`,
+    };
   }
 
   await db.$transaction(async (tx) => {
@@ -127,8 +158,7 @@ export async function startExaminationAction(appointmentId: string): Promise<Act
     });
   });
 
-  revalidatePath("/dokter");
-  revalidatePath(`/dokter/periksa/${appointmentId}`);
+  revalidateDoctorAndQueuePages(appointmentId);
   return { ok: true, message: `Pemeriksaan pasien ${appointment.patient.name} dimulai.` };
 }
 
@@ -277,7 +307,10 @@ export async function saveSoapRecordAction(
         if (appointment.status === "CONFIRMED") {
           await tx.appointment.update({
             where: { id: appointmentId },
-            data: { status: "IN_PROGRESS" },
+            data: {
+              status: "IN_PROGRESS",
+              calledAt: appointment.calledAt ?? new Date(),
+            },
           });
 
           await tx.appointmentHistory.create({
@@ -319,9 +352,7 @@ export async function saveSoapRecordAction(
 
   revalidatePath("/staf/farmasi");
   revalidatePath("/staf/farmasi/obat");
-  revalidatePath("/dokter");
-  revalidatePath("/dokter/pasien");
-  revalidatePath(`/dokter/periksa/${appointmentId}`);
+  revalidateDoctorAndQueuePages(appointmentId);
   return {
     ok: true,
     message: markCompleted

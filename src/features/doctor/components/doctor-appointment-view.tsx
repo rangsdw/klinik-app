@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   Play,
   Pill,
+  RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -91,6 +92,19 @@ export function DoctorAppointmentView({
   const [selectedDate, setSelectedDate] = useState(currentDate);
   const [editingAppointment, setEditingAppointment] = useState<AppointmentItem | null>(null);
 
+  useEffect(() => {
+    setSelectedDate(currentDate);
+  }, [currentDate]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible" && !editingAppointment) {
+        router.refresh();
+      }
+    }, 15_000);
+    return () => window.clearInterval(id);
+  }, [router, editingAppointment]);
+
   function handleDateChange(newDate: string) {
     setSelectedDate(newDate);
     router.push(`/dokter?date=${newDate}`);
@@ -126,6 +140,10 @@ export function DoctorAppointmentView({
         return <Badge className="bg-warning-soft text-warning-ink border-warning/20">Menunggu</Badge>;
       case "CANCELLED":
         return <Badge className="bg-danger-soft text-danger-ink border-danger/20">Dibatalkan</Badge>;
+      case "NO_SHOW":
+        return <Badge className="bg-paper text-ink-muted border-line">Tidak Hadir</Badge>;
+      case "REJECTED":
+        return <Badge className="bg-danger-soft text-danger-ink border-danger/20">Ditolak</Badge>;
       default:
         return <Badge variant="outline">{status}</Badge>;
     }
@@ -152,6 +170,17 @@ export function DoctorAppointmentView({
             onChange={(e) => handleDateChange(e.target.value)}
             className="w-auto bg-surface text-sm font-medium"
           />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => router.refresh()}
+            className="h-9 gap-1.5 text-xs"
+            title="Muat ulang daftar antrean"
+          >
+            <RefreshCw className="size-3.5" />
+            <span className="hidden sm:inline">Segarkan</span>
+          </Button>
         </div>
       </div>
 
@@ -213,7 +242,7 @@ export function DoctorAppointmentView({
             Daftar Antrean &amp; Janji Temu ({appointments.length})
           </h2>
           <span className="text-xs text-ink-muted">
-            Format Waktu: 24 Jam · Diurutkan berdasarkan nomor antrean
+            Format Waktu: 24 Jam · Diurutkan berdasarkan nomor antrean · Sinkron otomatis tiap 15 detik
           </span>
         </div>
 
@@ -382,7 +411,7 @@ export function DoctorAppointmentView({
 
                       {/* Right: Actions */}
                       <div className="flex flex-wrap items-center gap-2 self-end sm:self-auto">
-                        {item.status !== "COMPLETED" && item.status !== "IN_PROGRESS" && (
+                        {item.status === "CONFIRMED" && (
                           <Button
                             variant="outline"
                             size="sm"
@@ -404,58 +433,64 @@ export function DoctorAppointmentView({
                           Ubah Jadwal
                         </Button>
 
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          asChild
-                          className="h-8 gap-1.5 text-xs border-primary-300 text-primary-800 hover:bg-primary-50"
-                        >
-                          <Link
-                            href={`/dokter/periksa/${item.id}?tab=prescription`}
-                            onClick={() => {
-                              try {
-                                localStorage.setItem(
-                                  "active_exam",
-                                  JSON.stringify({
-                                    id: item.id,
-                                    patientName: item.patient.name,
-                                    queueNumber: item.queueNumber,
-                                  }),
-                                );
-                                window.dispatchEvent(new Event("active_exam_changed"));
-                              } catch {}
-                            }}
-                          >
-                            <Pill className="size-3.5 text-primary-700" />
-                            {prescriptionsCount > 0 ? "Edit E-Resep" : "Buat E-Resep"}
-                          </Link>
-                        </Button>
+                        {(item.status === "CONFIRMED" ||
+                          item.status === "IN_PROGRESS" ||
+                          item.status === "COMPLETED") && (
+                          <>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              asChild
+                              className="h-8 gap-1.5 text-xs border-primary-300 text-primary-800 hover:bg-primary-50"
+                            >
+                              <Link
+                                href={`/dokter/periksa/${item.id}?tab=prescription`}
+                                onClick={() => {
+                                  try {
+                                    localStorage.setItem(
+                                      "active_exam",
+                                      JSON.stringify({
+                                        id: item.id,
+                                        patientName: item.patient.name,
+                                        queueNumber: item.queueNumber,
+                                      }),
+                                    );
+                                    window.dispatchEvent(new Event("active_exam_changed"));
+                                  } catch {}
+                                }}
+                              >
+                                <Pill className="size-3.5 text-primary-700" />
+                                {prescriptionsCount > 0 ? "Edit E-Resep" : "Buat E-Resep"}
+                              </Link>
+                            </Button>
 
-                        <Button
-                          size="sm"
-                          asChild
-                          className="h-8 gap-1.5 text-xs bg-primary-700 hover:bg-primary-800 text-surface"
-                        >
-                          <Link
-                            href={`/dokter/periksa/${item.id}`}
-                            onClick={() => {
-                              try {
-                                localStorage.setItem(
-                                  "active_exam",
-                                  JSON.stringify({
-                                    id: item.id,
-                                    patientName: item.patient.name,
-                                    queueNumber: item.queueNumber,
-                                  }),
-                                );
-                                window.dispatchEvent(new Event("active_exam_changed"));
-                              } catch {}
-                            }}
-                          >
-                            <Stethoscope className="size-3.5" />
-                            {item.status === "COMPLETED" ? "Lihat / Edit SOAP" : "Periksa & SOAP"}
-                          </Link>
-                        </Button>
+                            <Button
+                              size="sm"
+                              asChild
+                              className="h-8 gap-1.5 text-xs bg-primary-700 hover:bg-primary-800 text-surface"
+                            >
+                              <Link
+                                href={`/dokter/periksa/${item.id}`}
+                                onClick={() => {
+                                  try {
+                                    localStorage.setItem(
+                                      "active_exam",
+                                      JSON.stringify({
+                                        id: item.id,
+                                        patientName: item.patient.name,
+                                        queueNumber: item.queueNumber,
+                                      }),
+                                    );
+                                    window.dispatchEvent(new Event("active_exam_changed"));
+                                  } catch {}
+                                }}
+                              >
+                                <Stethoscope className="size-3.5" />
+                                {item.status === "COMPLETED" ? "Lihat / Edit SOAP" : "Periksa & SOAP"}
+                              </Link>
+                            </Button>
+                          </>
+                        )}
                       </div>
                     </div>
                   </CardContent>

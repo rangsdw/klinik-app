@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { requireRole } from "@/lib/rbac";
+import { jakartaTodayStr } from "@/lib/date";
 import {
   getDoctorAppointments,
   getDoctorStats,
@@ -16,9 +17,10 @@ export default async function DoctorDashboardPage({
   const user = await requireRole("DOCTOR");
   const params = await searchParams;
 
-  // Format YYYY-MM-DD
-  const todayStr = new Date().toISOString().split("T")[0];
-  const currentDate = params.date || todayStr;
+  // Format YYYY-MM-DD (WIB)
+  const todayStr = jakartaTodayStr();
+  const currentDate =
+    params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date) ? params.date : todayStr;
 
   const [appointments, stats] = await Promise.all([
     getDoctorAppointments(user.id, currentDate),

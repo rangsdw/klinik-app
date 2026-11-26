@@ -256,6 +256,7 @@ function revalidateAppointmentPages() {
   revalidatePath("/staf/pendaftaran");
   revalidatePath("/staf/pendaftaran/antrean");
   revalidatePath("/dokter");
+  revalidatePath("/dokter/periksa");
 }
 
 export async function getAvailableSessionsAction(
@@ -646,6 +647,7 @@ export async function callNextQueueAction(
     revalidatePath("/staf/pendaftaran/antrean");
     revalidatePath("/pasien/antrean");
     revalidatePath("/dokter");
+    revalidatePath("/dokter/periksa");
     return {
       ok: true,
       message: `Memanggil antrean ${res.formattedQueueNumber} (${res.patientName}).`,
@@ -678,6 +680,7 @@ export async function recallQueueAction(
     revalidatePath("/staf/pendaftaran/antrean");
     revalidatePath("/pasien/antrean");
     revalidatePath("/dokter");
+    revalidatePath("/dokter/periksa");
     const queueLabel = res.formattedQueueNumber ? ` ${res.formattedQueueNumber}` : "";
     return {
       ok: true,

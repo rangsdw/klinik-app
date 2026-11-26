@@ -1,5 +1,14 @@
 import "server-only";
+import { AppointmentStatus } from "@prisma/client";
 import { db } from "@/lib/db";
+import { jakartaTodayStr, parseDateOnlyUtc } from "@/lib/date";
+
+const DOCTOR_QUEUE_STATUSES: AppointmentStatus[] = [
+  "CONFIRMED",
+  "IN_PROGRESS",
+  "COMPLETED",
+  "NO_SHOW",
+];
 
 export type SerializedMedicine = {
   id: string;
@@ -17,13 +26,13 @@ export type SerializedMedicine = {
 };
 
 export async function getDoctorAppointments(doctorId: string, dateStr?: string) {
-  const targetDate = dateStr ? new Date(`${dateStr}T00:00:00.000Z`) : new Date();
-  targetDate.setUTCHours(0, 0, 0, 0);
+  const targetDate = parseDateOnlyUtc(dateStr || jakartaTodayStr());
 
   const appointments = await db.appointment.findMany({
     where: {
       doctorId,
       appointmentDate: targetDate,
+      status: { in: DOCTOR_QUEUE_STATUSES },
     },
     include: {
       patient: {
@@ -72,18 +81,21 @@ export async function getDoctorAppointments(doctorId: string, dateStr?: string) 
 }
 
 export async function getDoctorStats(doctorId: string, dateStr?: string) {
-  const targetDate = dateStr ? new Date(`${dateStr}T00:00:00.000Z`) : new Date();
-  targetDate.setUTCHours(0, 0, 0, 0);
+  const targetDate = parseDateOnlyUtc(dateStr || jakartaTodayStr());
 
   const [total, waiting, inProgress, completed] = await Promise.all([
     db.appointment.count({
-      where: { doctorId, appointmentDate: targetDate },
+      where: {
+        doctorId,
+        appointmentDate: targetDate,
+        status: { in: DOCTOR_QUEUE_STATUSES },
+      },
     }),
     db.appointment.count({
       where: {
         doctorId,
         appointmentDate: targetDate,
-        status: { in: ["PENDING", "CONFIRMED"] },
+        status: "CONFIRMED",
       },
     }),
     db.appointment.count({
