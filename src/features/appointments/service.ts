@@ -5,11 +5,15 @@ import {
   addDaysToDateStr,
   ageLabel,
   dayOfWeekFromDateStr,
+  formatDate,
   jakartaCurrentTimeStr,
   jakartaTodayStr,
   parseDateOnlyUtc,
   toDateInput,
 } from "@/lib/date";
+import { clinicConfig } from "@/config/clinic";
+import { env } from "@/lib/env";
+import { emailLayout, sendMail } from "@/lib/mail";
 import { activePatientWhere, getOwnedPatient } from "@/features/patients/queries";
 import { createPatient, normalizeMemberInput } from "@/features/patients/service";
 import {
@@ -352,19 +356,104 @@ export async function nextQueueNumber(
   return value;
 }
 
-/** Titik sambung notifikasi status janji (belum mengirim email/WhatsApp). */
-export async function notifyAppointmentStatus(params: {
+export type AppointmentNotificationParams = {
   appointmentId: string;
+  recipientEmail?: string | null;
   patientName: string;
   doctorName: string;
   dateStr: string;
   startTime: string;
+  endTime?: string;
   status: "CONFIRMED" | "REJECTED" | "RESCHEDULED";
   queueNumber?: number;
   reason?: string;
-}): Promise<void> {
-  // TODO(notifikasi): kirim email via sendMail (src/lib/mail.ts) atau WhatsApp saat kredensial tersedia.
-  void params;
+};
+
+/** Bentuk subjek, teks polos, dan HTML email status janji temu pasien. */
+export function buildAppointmentStatusEmail(params: AppointmentNotificationParams): {
+  subject: string;
+  text: string;
+  html: string;
+} {
+  const clinicName = clinicConfig.name;
+  const formattedDate = formatDate(parseDateOnlyUtc(params.dateStr));
+  const timeLabel = params.endTime
+    ? `${params.startTime} s.d. ${params.endTime} WIB`
+    : `${params.startTime} WIB`;
+  const appUrl = env.NEXT_PUBLIC_APP_URL.replace(/\/$/, "");
+  const queueLabel = params.queueNumber ? formatQueueNumber(params.queueNumber) : null;
+
+  if (params.status === "CONFIRMED") {
+    const queueInfo = queueLabel ? ` Nomor antrean Anda: ${queueLabel}.` : "";
+    const intro = `Janji temu untuk ${params.patientName} bersama ${params.doctorName} pada ${formattedDate} (${timeLabel}) telah disetujui.${queueInfo}`;
+    const outro =
+      "Setibanya di klinik, tunjukkan QR Code pasien di portal agar staf pendaftaran dapat melakukan check-in.";
+    return {
+      subject: `[${clinicName}] Janji temu disetujui${queueLabel ? ` (${queueLabel})` : ""}`,
+      text: `${intro}\n\nPantau antrean Anda di: ${appUrl}/pasien/antrean\n\n${outro}`,
+      html: emailLayout({
+        title: "Janji Temu Disetujui",
+        intro,
+        actionLabel: "Pantau Antrean Saya",
+        actionUrl: `${appUrl}/pasien/antrean`,
+        outro,
+      }),
+    };
+  }
+
+  if (params.status === "REJECTED") {
+    const reasonText = params.reason ? ` Alasan: ${params.reason}.` : "";
+    const intro = `Mohon maaf, pengajuan janji temu untuk ${params.patientName} bersama ${params.doctorName} pada ${formattedDate} (${timeLabel}) tidak dapat diproses.${reasonText}`;
+    const outro = "Silakan ajukan ulang janji temu untuk jadwal praktik dokter yang tersedia.";
+    return {
+      subject: `[${clinicName}] Pengajuan janji temu ditolak`,
+      text: `${intro}\n\nLihat jadwal tersedia di: ${appUrl}/pasien/janji\n\n${outro}`,
+      html: emailLayout({
+        title: "Pengajuan Janji Temu Ditolak",
+        intro,
+        actionLabel: "Buat Janji Ulang",
+        actionUrl: `${appUrl}/pasien/janji`,
+        outro,
+      }),
+    };
+  }
+
+  const queueInfo = queueLabel ? ` Nomor antrean baru: ${queueLabel}.` : "";
+  const reasonText = params.reason ? ` Alasan: ${params.reason}.` : "";
+  const intro = `Janji temu untuk ${params.patientName} telah dijadwalkan ulang menjadi bersama ${params.doctorName} pada ${formattedDate} (${timeLabel}).${queueInfo}${reasonText}`;
+  const outro = "Buka menu Janji di portal pasien untuk melihat rincian jadwal terbaru.";
+  return {
+    subject: `[${clinicName}] Perubahan jadwal janji temu${queueLabel ? ` (${queueLabel})` : ""}`,
+    text: `${intro}\n\nLihat jadwal terbaru di: ${appUrl}/pasien/janji\n\n${outro}`,
+    html: emailLayout({
+      title: "Janji Temu Dijadwalkan Ulang",
+      intro,
+      actionLabel: "Lihat Jadwal Terbaru",
+      actionUrl: `${appUrl}/pasien/janji`,
+      outro,
+    }),
+  };
+}
+
+/**
+ * Kirim notifikasi perubahan status janji ke email akun pasien (via `src/lib/mail.ts`).
+ * Tanpa kredensial SMTP di lokal, `sendMail` mencetak isi email ke console server.
+ */
+export async function notifyAppointmentStatus(
+  params: AppointmentNotificationParams,
+): Promise<void> {
+  if (!params.recipientEmail) return;
+  if (env.NODE_ENV === "test" && !env.SMTP_HOST) return;
+
+  const mail = buildAppointmentStatusEmail(params);
+  try {
+    await sendMail({
+      to: params.recipientEmail,
+      ...mail,
+    });
+  } catch (error) {
+    console.error(`[notifikasi] Gagal mengirim email status janji ${params.appointmentId}:`, error);
+  }
 }
 
 /** Setujui janji PENDING dan terbitkan nomor antrean atomik per dokter per hari. */
@@ -375,7 +464,7 @@ export async function approveAppointmentByStaff(staffUserId: string, appointment
     const appointment = await tx.appointment.findUnique({
       where: { id: appointmentId },
       include: {
-        patient: { select: { name: true } },
+        patient: { select: { name: true, account: { select: { email: true } } } },
         doctor: { select: { name: true } },
       },
     });
@@ -416,19 +505,23 @@ export async function approveAppointmentByStaff(staffUserId: string, appointment
       id: updated.id,
       queueNumber,
       formattedQueueNumber,
+      recipientEmail: appointment.patient.account?.email ?? null,
       patientName: appointment.patient.name,
       doctorName: appointment.doctor.name,
       dateStr,
       startTime: appointment.startTime,
+      endTime: appointment.endTime,
     };
   });
 
   await notifyAppointmentStatus({
     appointmentId: result.id,
+    recipientEmail: result.recipientEmail,
     patientName: result.patientName,
     doctorName: result.doctorName,
     dateStr: result.dateStr,
     startTime: result.startTime,
+    endTime: result.endTime,
     status: "CONFIRMED",
     queueNumber: result.queueNumber,
   });
@@ -453,7 +546,7 @@ export async function rejectAppointmentByStaff(staffUserId: string, input: Rejec
     const appointment = await tx.appointment.findUnique({
       where: { id: input.appointmentId },
       include: {
-        patient: { select: { name: true } },
+        patient: { select: { name: true, account: { select: { email: true } } } },
         doctor: { select: { name: true } },
       },
     });
@@ -485,19 +578,23 @@ export async function rejectAppointmentByStaff(staffUserId: string, input: Rejec
 
     return {
       updated,
+      recipientEmail: appointment.patient.account?.email ?? null,
       patientName: appointment.patient.name,
       doctorName: appointment.doctor.name,
       dateStr: toDateInput(appointment.appointmentDate),
       startTime: appointment.startTime,
+      endTime: appointment.endTime,
     };
   });
 
   await notifyAppointmentStatus({
     appointmentId: result.updated.id,
+    recipientEmail: result.recipientEmail,
     patientName: result.patientName,
     doctorName: result.doctorName,
     dateStr: result.dateStr,
     startTime: result.startTime,
+    endTime: result.endTime,
     status: "REJECTED",
     reason,
   });
@@ -529,7 +626,7 @@ export async function rescheduleAppointmentByStaff(
     const appointment = await tx.appointment.findUnique({
       where: { id: input.appointmentId },
       include: {
-        patient: { select: { id: true, name: true } },
+        patient: { select: { id: true, name: true, account: { select: { email: true } } } },
         doctor: { select: { id: true, name: true } },
       },
     });
@@ -652,18 +749,22 @@ export async function rescheduleAppointmentByStaff(
       status: updated.status,
       queueNumber: newQueueNumber,
       formattedQueueNumber: newQueueNumber !== null ? formatQueueNumber(newQueueNumber) : null,
+      recipientEmail: appointment.patient.account?.email ?? null,
       patientName: appointment.patient.name,
       doctorName: targetSchedule.doctor.name,
       startTime: targetSchedule.startTime,
+      endTime: targetSchedule.endTime,
     };
   });
 
   await notifyAppointmentStatus({
     appointmentId: result.id,
+    recipientEmail: result.recipientEmail,
     patientName: result.patientName,
     doctorName: result.doctorName,
     dateStr: input.appointmentDate,
     startTime: result.startTime,
+    endTime: result.endTime,
     status: "RESCHEDULED",
     queueNumber: result.queueNumber ?? undefined,
     reason,

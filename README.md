@@ -94,7 +94,7 @@ Seeder idempoten (aman diulang) dan menolak berjalan saat `NODE_ENV=production`.
 | `/pasien/keluarga`, `/pasien/keluarga/[id]`                      | PATIENT                | Akun keluarga (maks. 10 anggota)                      |
 | `/pasien/janji`                                                  | PATIENT                | Booking janji temu dokter, cek kuota sesi, dan daftar janji |
 | `/pasien/antrean`                                                | PATIENT                | Live queue: nomor antrean Anda, Antrean Sekarang, dan sisa antrean dengan pembaruan otomatis |
-| `/pasien/riwayat`                                                | PATIENT                | Placeholder "Segera hadir" (tahap berikutnya)         |
+| `/pasien/riwayat`                                                | PATIENT                | Riwayat kunjungan selesai, ringkasan hasil periksa dokter, dan aturan minum obat |
 | `/pasien/profil`                                                 | PATIENT                | Ubah profil, ganti password, keluar                   |
 | `/_design`                                                       | development saja       | Living style guide semua komponen                     |
 
