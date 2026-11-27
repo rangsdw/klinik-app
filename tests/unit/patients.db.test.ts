@@ -1,23 +1,36 @@
+import bcrypt from "bcryptjs";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { formatMedicalRecordNumber, generateMedicalRecordNumber } from "@/features/patients/mrn";
 import {
   addFamilyMember,
+  CannotDeleteSelfPatientError,
   createPatient,
   FamilyLimitError,
+  PatientHasHistoryError,
   PatientNotOwnedError,
   regeneratePatientQrToken,
   registerPatientAccount,
+  softDeleteFamilyMember,
 } from "@/features/patients/service";
 import {
   countPatientsForAccount,
   getOwnedPatient,
+  listMedicalHistoryForPatient,
   listPatientsForAccount,
 } from "@/features/patients/queries";
 import { MAX_FAMILY_MEMBERS } from "@/config/clinic";
 
 /** Integrasi ke database test terpisah (klinik_app_test), dibersihkan tiap test. */
 async function clean() {
+  await db.stockLog.deleteMany();
+  await db.medicineBatch.deleteMany();
+  await db.prescriptionItem.deleteMany();
+  await db.medicalRecord.deleteMany();
+  await db.appointmentHistory.deleteMany();
+  await db.appointment.deleteMany();
+  await db.doctorSchedule.deleteMany();
+  await db.medicine.deleteMany();
   await db.passwordResetToken.deleteMany();
   await db.patient.deleteMany();
   await db.user.deleteMany();
@@ -195,5 +208,156 @@ describe("QR Code pasien", () => {
     expect(await getOwnedPatient(akun.user.id, walkInPatient.id)).toBeNull();
     expect(await listPatientsForAccount("")).toEqual([]);
     expect(await getOwnedPatient("", walkInPatient.id)).toBeNull();
+  });
+});
+
+describe("riwayat kunjungan & proteksi hapus anggota", () => {
+  it("listMedicalHistoryForPatient menampilkan kunjungan COMPLETED beserta resep dan menyembunyikan draf/akun lain", async () => {
+    const [akunA, akunB] = await Promise.all([newAccount(), newAccount()]);
+    const hash = await bcrypt.hash("rahasia123", 4);
+    const doctor = await db.user.create({
+      data: {
+        name: "dr. Riwayat Uji",
+        email: `dokter-riwayat-${seq}@contoh.test`,
+        phone: `08139999${String(seq).padStart(4, "0")}`,
+        passwordHash: hash,
+        role: "DOCTOR",
+        isActive: true,
+      },
+    });
+    const med = await db.medicine.create({
+      data: {
+        code: `MED-RIW-${seq}`,
+        name: "Paracetamol 500mg",
+        dosageForm: "Tablet",
+        unit: "Strip",
+        stock: 20,
+        price: 5000,
+      },
+    });
+
+    const completedAppt = await db.appointment.create({
+      data: {
+        patientId: akunA.patient.id,
+        doctorId: doctor.id,
+        appointmentDate: new Date("2026-11-20T00:00:00.000Z"),
+        startTime: "08:00",
+        endTime: "11:00",
+        queueNumber: 1,
+        status: "COMPLETED",
+        chiefComplaint: "Demam tinggi",
+      },
+    });
+    await db.medicalRecord.create({
+      data: {
+        appointmentId: completedAppt.id,
+        patientId: akunA.patient.id,
+        doctorId: doctor.id,
+        subjective: "Demam 2 hari",
+        objective: "Suhu 38.5 C",
+        assessment: "ISPA",
+        plan: "Istirahat cukup dan minum air",
+        bloodPressure: "120/80",
+        bodyTemperature: 38.5,
+        bodyWeight: 65,
+        pulseRate: 88,
+        pharmacyStatus: "DISPENSED",
+        prescriptions: {
+          create: {
+            medicineId: med.id,
+            quantity: 1,
+            dosageInstructions: "3x1 tablet sesudah makan",
+            notes: "Bila demam",
+          },
+        },
+      },
+    });
+
+    // Kunjungan masih IN_PROGRESS tidak boleh tampil di riwayat pasien
+    const draftAppt = await db.appointment.create({
+      data: {
+        patientId: akunA.patient.id,
+        doctorId: doctor.id,
+        appointmentDate: new Date("2026-11-27T00:00:00.000Z"),
+        startTime: "09:00",
+        endTime: "12:00",
+        queueNumber: 2,
+        status: "IN_PROGRESS",
+        chiefComplaint: "Masih diperiksa",
+      },
+    });
+    await db.medicalRecord.create({
+      data: {
+        appointmentId: draftAppt.id,
+        patientId: akunA.patient.id,
+        doctorId: doctor.id,
+        assessment: "Draf belum selesai",
+      },
+    });
+
+    const historyA = await listMedicalHistoryForPatient(akunA.user.id, akunA.patient.id);
+    expect(historyA).toHaveLength(1);
+    expect(historyA[0]?.assessment).toBe("ISPA");
+    expect(historyA[0]?.doctorName).toBe("dr. Riwayat Uji");
+    expect(historyA[0]?.prescriptions).toHaveLength(1);
+    expect(historyA[0]?.prescriptions[0]?.dosageInstructions).toBe("3x1 tablet sesudah makan");
+
+    // Akun B tidak boleh mengakses riwayat milik Akun A
+    expect(await listMedicalHistoryForPatient(akunB.user.id, akunA.patient.id)).toEqual([]);
+  });
+
+  it("softDeleteFamilyMember menolak data diri sendiri serta anggota dengan janji/rekam medis, dan mengizinkan anggota tanpa kunjungan", async () => {
+    const akun = await newAccount();
+    const childUnused = await addFamilyMember(akun.user.id, {
+      name: "anak bersih",
+      relationship: "CHILD",
+      birthDate: "2020-01-01",
+      gender: "FEMALE",
+    });
+    const childWithVisit = await addFamilyMember(akun.user.id, {
+      name: "anak pernah periksa",
+      relationship: "CHILD",
+      birthDate: "2018-03-03",
+      gender: "MALE",
+    });
+
+    // Data diri sendiri ditolak
+    await expect(softDeleteFamilyMember(akun.user.id, akun.patient.id)).rejects.toBeInstanceOf(
+      CannotDeleteSelfPatientError,
+    );
+
+    // Anggota tanpa kunjungan dapat dihapus
+    await softDeleteFamilyMember(akun.user.id, childUnused.id);
+    expect(await getOwnedPatient(akun.user.id, childUnused.id)).toBeNull();
+
+    // Anggota dengan kunjungan / rekam medis ditolak
+    const hash = await bcrypt.hash("rahasia123", 4);
+    const doctor = await db.user.create({
+      data: {
+        name: "dr. Proteksi Hapus",
+        email: `dokter-del-${seq}@contoh.test`,
+        phone: `08138888${String(seq).padStart(4, "0")}`,
+        passwordHash: hash,
+        role: "DOCTOR",
+        isActive: true,
+      },
+    });
+    await db.appointment.create({
+      data: {
+        patientId: childWithVisit.id,
+        doctorId: doctor.id,
+        appointmentDate: new Date("2026-11-27T00:00:00.000Z"),
+        startTime: "08:00",
+        endTime: "10:00",
+        status: "CONFIRMED",
+        queueNumber: 1,
+        chiefComplaint: "Kontrol rutin",
+      },
+    });
+
+    await expect(softDeleteFamilyMember(akun.user.id, childWithVisit.id)).rejects.toBeInstanceOf(
+      PatientHasHistoryError,
+    );
+    expect(await getOwnedPatient(akun.user.id, childWithVisit.id)).not.toBeNull();
   });
 });

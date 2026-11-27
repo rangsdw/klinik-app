@@ -143,6 +143,71 @@ export class PatientNotOwnedError extends Error {
   }
 }
 
+export class CannotDeleteSelfPatientError extends Error {
+  constructor(message = "Data diri sendiri tidak bisa dihapus.") {
+    super(message);
+    this.name = "CannotDeleteSelfPatientError";
+  }
+}
+
+export class PatientHasHistoryError extends Error {
+  constructor(message = "Anggota keluarga sudah memiliki riwayat kunjungan atau rekam medis.") {
+    super(message);
+    this.name = "PatientHasHistoryError";
+  }
+}
+
+/**
+ * Soft delete anggota keluarga milik akun yang login.
+ * Menolak penghapusan untuk data diri sendiri, pasien dengan rekam medis, atau yang masih memiliki kunjungan/janji aktif.
+ */
+export async function softDeleteFamilyMember(
+  accountUserId: string,
+  patientId: string,
+): Promise<{ id: string }> {
+  return db.$transaction(async (tx) => {
+    const existing = await tx.patient.findFirst({
+      where: activePatientWhere({ id: patientId, accountUserId }),
+      select: { id: true, isSelf: true },
+    });
+
+    if (!existing) {
+      throw new PatientNotOwnedError();
+    }
+    if (existing.isSelf) {
+      throw new CannotDeleteSelfPatientError();
+    }
+
+    const [medicalRecordCount, appointmentCount] = await Promise.all([
+      tx.medicalRecord.count({ where: { patientId: existing.id } }),
+      tx.appointment.count({
+        where: {
+          patientId: existing.id,
+          status: { in: ["PENDING", "CONFIRMED", "IN_PROGRESS", "COMPLETED"] },
+        },
+      }),
+    ]);
+
+    if (medicalRecordCount > 0) {
+      throw new PatientHasHistoryError(
+        "Anggota keluarga ini sudah memiliki rekam medis sehingga tidak dapat dihapus.",
+      );
+    }
+    if (appointmentCount > 0) {
+      throw new PatientHasHistoryError(
+        "Anggota keluarga ini sudah memiliki riwayat kunjungan atau janji temu aktif sehingga tidak dapat dihapus.",
+      );
+    }
+
+    await tx.patient.update({
+      where: { id: existing.id },
+      data: { deletedAt: new Date() },
+    });
+
+    return { id: existing.id };
+  });
+}
+
 /**
  * Terbitkan token QR baru untuk pasien milik akun yang login.
  * Token lama langsung tidak berlaku di database.

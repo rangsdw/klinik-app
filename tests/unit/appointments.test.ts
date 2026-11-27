@@ -8,6 +8,7 @@ import {
 } from "@/features/appointments/schemas";
 import {
   assertValidScheduleSlot,
+  buildAppointmentStatusEmail,
   getQuotaStatus,
   InvalidBookingDateError,
   ScheduleOverlapError,
@@ -204,5 +205,56 @@ describe("rescheduleAppointmentSchema", () => {
         reason: "Dokter berhalangan hadir pada tanggal awal",
       }).success,
     ).toBe(true);
+  });
+});
+
+describe("buildAppointmentStatusEmail", () => {
+  it("menyusun email notifikasi CONFIRMED, REJECTED, dan RESCHEDULED dalam Bahasa Indonesia", () => {
+    const confirmed = buildAppointmentStatusEmail({
+      appointmentId: "app-1",
+      recipientEmail: "pasien@contoh.test",
+      patientName: "Budi Santoso",
+      doctorName: "dr. Andi Pratama",
+      dateStr: "2026-11-27",
+      startTime: "08:00",
+      endTime: "11:00",
+      status: "CONFIRMED",
+      queueNumber: 5,
+    });
+    expect(confirmed.subject).toContain("disetujui");
+    expect(confirmed.subject).toContain("A-05");
+    expect(confirmed.text).toContain("Budi Santoso");
+    expect(confirmed.text).toContain("/pasien/antrean");
+    expect(confirmed.html).toContain("Janji Temu Disetujui");
+
+    const rejected = buildAppointmentStatusEmail({
+      appointmentId: "app-2",
+      recipientEmail: "pasien@contoh.test",
+      patientName: "Budi Santoso",
+      doctorName: "dr. Andi Pratama",
+      dateStr: "2026-11-27",
+      startTime: "08:00",
+      status: "REJECTED",
+      reason: "Dokter cuti mendadak",
+    });
+    expect(rejected.subject).toContain("ditolak");
+    expect(rejected.text).toContain("Dokter cuti mendadak");
+
+    const rescheduled = buildAppointmentStatusEmail({
+      appointmentId: "app-3",
+      recipientEmail: "pasien@contoh.test",
+      patientName: "Budi Santoso",
+      doctorName: "dr. Citra Dewi",
+      dateStr: "2026-11-28",
+      startTime: "13:00",
+      endTime: "16:00",
+      status: "RESCHEDULED",
+      queueNumber: 2,
+      reason: "Dialihkan ke sesi siang",
+    });
+    expect(rescheduled.subject).toContain("Perubahan jadwal");
+    expect(rescheduled.subject).toContain("A-02");
+    expect(rescheduled.text).toContain("dr. Citra Dewi");
+    expect(rescheduled.text).toContain("Dialihkan ke sesi siang");
   });
 });

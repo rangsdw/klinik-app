@@ -25,10 +25,13 @@ import {
 import {
   addFamilyMember,
   BCRYPT_COST,
+  CannotDeleteSelfPatientError,
   FamilyLimitError,
   normalizeMemberInput,
+  PatientHasHistoryError,
   PatientNotOwnedError,
   regeneratePatientQrToken,
+  softDeleteFamilyMember,
   uniqueFieldFromError,
 } from "@/features/patients/service";
 
@@ -118,18 +121,24 @@ export async function updatePatientAction(
   return { ok: true, message: "Data pasien diperbarui." };
 }
 
-/** Soft delete anggota keluarga (bukan pasien diri sendiri). */
+/** Soft delete anggota keluarga (bukan pasien diri sendiri dan belum memiliki rekam medis/kunjungan). */
 export async function deletePatientAction(patientId: string): Promise<ActionResult> {
   const user = await requireRole("PATIENT");
-  const existing = await getOwnedPatient(user.id, patientId);
-  if (!existing) notFound();
-  if (existing.isSelf) return { ok: false, message: "Data diri sendiri tidak bisa dihapus." };
 
-  // TODO(Ravy, modul rekam medis): tolak penghapusan bila pasien sudah punya data kunjungan/rekam medis.
-  await db.patient.update({ where: { id: existing.id }, data: { deletedAt: new Date() } });
+  try {
+    await softDeleteFamilyMember(user.id, patientId);
+  } catch (error) {
+    if (error instanceof PatientNotOwnedError) {
+      notFound();
+    }
+    if (error instanceof CannotDeleteSelfPatientError || error instanceof PatientHasHistoryError) {
+      return { ok: false, message: error.message };
+    }
+    throw error;
+  }
 
   const store = await cookies();
-  if (store.get(ACTIVE_PATIENT_COOKIE)?.value === existing.id) store.delete(ACTIVE_PATIENT_COOKIE);
+  if (store.get(ACTIVE_PATIENT_COOKIE)?.value === patientId) store.delete(ACTIVE_PATIENT_COOKIE);
   revalidatePath("/pasien", "layout");
   redirect("/pasien/keluarga?dihapus=1");
 }

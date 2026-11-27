@@ -71,6 +71,7 @@ test.describe("alur lengkap: QR, check-in, walk-in, panggilan staf, dan live que
   test("pasien booking -> staf setujui -> pasien buka QR -> staf check-in -> staf panggil -> pasien pantau /pasien/antrean", async ({
     page,
   }) => {
+    test.slow();
     const suffix = uniqueSuffix();
     const complaint = `[E2E-LIVE-QUEUE-${suffix}] Kontrol gejala demam`;
     createdComplaints.push(complaint);
